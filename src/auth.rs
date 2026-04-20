@@ -298,6 +298,18 @@ pub mod builder {
         },
     }
 
+    fn validate_remote_host(host: &Url, allow_insecure: bool) -> Result<()> {
+        match (host.scheme(), allow_insecure) {
+            ("https", _) | ("http", true) => Ok(()),
+            ("http", false) => Err(crate::Error::validation(
+                "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev",
+            )),
+            _ => Err(crate::Error::validation(
+                "remote builder signing URLs must use http:// or https://",
+            )),
+        }
+    }
+
     impl Config {
         #[must_use]
         pub fn local(credentials: Credentials) -> Self {
@@ -306,11 +318,7 @@ pub mod builder {
 
         pub fn remote(host: &str, token: Option<String>) -> Result<Self> {
             let host = Url::parse(host)?;
-            if host.scheme() != "https" {
-                return Err(crate::Error::validation(
-                    "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev",
-                ));
-            }
+            validate_remote_host(&host, false)?;
 
             Ok(Self::Remote {
                 host,
@@ -320,8 +328,11 @@ pub mod builder {
         }
 
         pub fn remote_insecure(host: &str, token: Option<String>) -> Result<Self> {
+            let host = Url::parse(host)?;
+            validate_remote_host(&host, true)?;
+
             Ok(Self::Remote {
-                host: Url::parse(host)?,
+                host,
                 token: token.map(SecretString::from),
                 allow_insecure: true,
             })
@@ -386,11 +397,7 @@ pub mod builder {
                     token,
                     allow_insecure,
                 } => {
-                    if host.scheme() != "https" && !allow_insecure {
-                        return Err(crate::Error::validation(
-                            "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev",
-                        ));
-                    }
+                    validate_remote_host(host, *allow_insecure)?;
 
                     let payload = json!({
                         "method": request.method().as_str(),

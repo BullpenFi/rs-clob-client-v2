@@ -236,6 +236,18 @@ fn remote_builder_config_rejects_http_hosts_by_default() {
     ));
 }
 
+#[test]
+fn remote_builder_config_rejects_non_http_schemes_in_insecure_mode() {
+    let error = builder::Config::remote_insecure("ftp://example.com/sign", None)
+        .expect_err("non-http schemes should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("remote builder signing URLs must use http:// or https://")
+    );
+}
+
 #[tokio::test]
 async fn remote_builder_headers_support_explicit_insecure_local_dev_hosts() {
     let signer_server = MockServer::start();
@@ -286,4 +298,32 @@ async fn remote_builder_headers_support_explicit_insecure_local_dev_hosts() {
     sign_mock.assert();
     api_mock.assert();
     assert!(response.api_keys.is_empty());
+}
+
+#[tokio::test]
+async fn remote_builder_runtime_validation_rejects_non_http_schemes() {
+    let api_server = MockServer::start();
+
+    let client = Client::new(
+        &api_server.base_url(),
+        Config::builder().allow_insecure(true).build(),
+    )
+    .expect("client")
+    .authentication_builder(&common::signer())
+    .credentials(common::credentials())
+    .kind(builder::Builder::new(builder::Config::Remote {
+        host: url::Url::parse("ftp://example.com/sign").expect("ftp url"),
+        token: None,
+        allow_insecure: true,
+    }))
+    .authenticate()
+    .await
+    .expect("authenticated client");
+
+    let error = client.api_keys().await.expect_err("ftp should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("remote builder signing URLs must use http:// or https://")
+    );
 }

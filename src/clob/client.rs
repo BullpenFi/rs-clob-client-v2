@@ -371,11 +371,9 @@ impl ClientInner<Unauthenticated> {
         nonce: Option<u32>,
     ) -> Result<Credentials> {
         let headers = self.create_headers(signer, nonce).await?;
-        let response = self.create_api_key_response(headers).await?;
-        if response.has_usable_key() {
-            response.into_credentials()
-        } else {
-            self.derive_api_key(signer, nonce).await
+        match self.create_api_key_response(headers).await {
+            Ok(response) if response.has_usable_key() => response.into_credentials(),
+            Ok(_) | Err(_) => self.derive_api_key(signer, nonce).await,
         }
     }
 

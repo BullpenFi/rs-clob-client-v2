@@ -172,7 +172,7 @@ async fn create_or_derive_api_key_falls_back_after_empty_create_response() {
 }
 
 #[tokio::test]
-async fn create_or_derive_api_key_propagates_create_failures() {
+async fn create_or_derive_api_key_falls_back_after_create_failure() {
     let server = MockServer::start();
     let signer = common::signer();
 
@@ -190,14 +190,17 @@ async fn create_or_derive_api_key_propagates_create_failures() {
     });
 
     let client = Client::new(&server.base_url(), insecure_config()).expect("client");
-    let error = client
+    let credentials = client
         .create_or_derive_api_key(&signer, Some(7))
         .await
-        .expect_err("create failure should be returned");
+        .expect("create failure should fall back to derive");
 
     create_mock.assert_calls(1);
-    derive_mock.assert_calls(0);
-    assert!(error.to_string().contains("500"));
+    derive_mock.assert_calls(1);
+    assert_eq!(
+        credentials.key().to_string(),
+        "00000000-0000-0000-0000-000000000000"
+    );
 }
 
 #[tokio::test]
