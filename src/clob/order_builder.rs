@@ -1,21 +1,29 @@
 use std::marker::PhantomData;
 use std::str::FromStr as _;
+use std::sync::Arc;
 
 use alloy::primitives::{B256, U256};
 use bon::Builder;
+use futures::future::BoxFuture;
 use rand::random;
 use rust_decimal::RoundingStrategy::{AwayFromZero, MidpointAwayFromZero, ToZero};
 
 use crate::auth::Kind as AuthKind;
 use crate::auth::state::Authenticated;
+use crate::auth::Signer;
 use crate::clob::Client;
 use crate::clob::types::{OrderType, Side, SignableOrder, SignatureTypeV2, new_order};
 use crate::error::Error;
+use crate::types::Address;
 use crate::types::Decimal;
 use crate::Result;
 
 pub const USDC_DECIMALS: u32 = 6;
 pub const LOT_SIZE_SCALE: u32 = 2;
+
+pub type DynSigner = Box<dyn Signer + Send + Sync>;
+pub type SignerFactory =
+    Arc<dyn Fn() -> BoxFuture<'static, Result<DynSigner>> + Send + Sync>;
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -50,12 +58,12 @@ pub struct UserMarketOrder {
     pub builder_code: Option<B256>,
 }
 
-#[derive(Debug)]
 pub struct OrderBuilder<OrderKind, K: AuthKind> {
     client: Client<Authenticated<K>>,
-    signer: crate::types::Address,
-    maker: crate::types::Address,
+    signer: Address,
+    maker: Address,
     signature_type: SignatureTypeV2,
+    signer_factory: Option<SignerFactory>,
     token_id: Option<U256>,
     price: Option<Decimal>,
     size: Option<Decimal>,
@@ -71,6 +79,47 @@ pub struct OrderBuilder<OrderKind, K: AuthKind> {
     _kind: PhantomData<OrderKind>,
 }
 
+impl<OrderKind, K: AuthKind> std::fmt::Debug for OrderBuilder<OrderKind, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OrderBuilder")
+            .field("signer", &self.signer)
+            .field("maker", &self.maker)
+            .field("signature_type", &self.signature_type)
+            .field("has_signer_factory", &self.signer_factory.is_some())
+            .field("token_id", &self.token_id)
+            .field("price", &self.price)
+            .field("size", &self.size)
+            .field("amount", &self.amount)
+            .field("side", &self.side)
+            .field("metadata", &self.metadata)
+            .field("builder_code", &self.builder_code)
+            .field("expiration", &self.expiration)
+            .field("order_type", &self.order_type)
+            .field("post_only", &self.post_only)
+            .field("defer_exec", &self.defer_exec)
+            .field("user_usdc_balance", &self.user_usdc_balance)
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) enum ResolvedSigner<'signer> {
+    Borrowed(&'signer dyn Signer),
+    Owned(DynSigner),
+}
+
+impl ResolvedSigner<'_> {
+    pub(crate) fn as_ref(&self) -> &dyn Signer {
+        match self {
+            Self::Borrowed(signer) => *signer,
+            Self::Owned(signer) => signer.as_ref(),
+        }
+    }
+
+    pub(crate) fn address(&self) -> Address {
+        self.as_ref().address()
+    }
+}
+
 impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
     pub(crate) fn new(client: Client<Authenticated<K>>) -> Self {
         let signer = client.address();
@@ -79,12 +128,14 @@ impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
         let builder_code = client
             .builder_config()
             .and_then(|config| B256::from_str(&config.builder_code).ok());
+        let signer_factory = client.signer_factory();
 
         Self {
             client,
             signer,
             maker,
             signature_type,
+            signer_factory,
             token_id: None,
             price: None,
             size: None,
@@ -142,6 +193,38 @@ impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
         self.defer_exec = Some(defer_exec);
         self
     }
+
+    #[must_use]
+    pub fn get_signer<F, Fut>(mut self, factory: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<DynSigner>> + Send + 'static,
+    {
+        self.signer_factory = Some(Arc::new(move || Box::pin(factory())));
+        self
+    }
+
+    pub(crate) async fn resolve_signer<'signer, S>(
+        &self,
+        signer: &'signer S,
+    ) -> Result<ResolvedSigner<'signer>>
+    where
+        S: Signer + 'signer,
+    {
+        if let Some(factory) = &self.signer_factory {
+            return Ok(ResolvedSigner::Owned(factory().await?));
+        }
+
+        Ok(ResolvedSigner::Borrowed(signer))
+    }
+
+    async fn resolve_signer_address(&self) -> Result<Address> {
+        if let Some(factory) = &self.signer_factory {
+            return Ok(factory().await?.address());
+        }
+
+        Ok(self.signer)
+    }
 }
 
 impl<K: AuthKind> OrderBuilder<Limit, K> {
@@ -164,6 +247,11 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
     }
 
     pub async fn build(self) -> Result<SignableOrder> {
+        let signer = self.resolve_signer_address().await?;
+        self.build_with_signer(signer).await
+    }
+
+    pub(crate) async fn build_with_signer(self, signer: Address) -> Result<SignableOrder> {
         let token_id = self
             .token_id
             .ok_or_else(|| Error::validation("token_id is required"))?;
@@ -219,7 +307,7 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
             order: new_order(
                 generate_salt(),
                 self.maker,
-                self.signer,
+                signer,
                 token_id,
                 to_scaled_u256(maker_amount, USDC_DECIMALS)?,
                 to_scaled_u256(taker_amount, USDC_DECIMALS)?,
@@ -261,6 +349,11 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
     }
 
     pub async fn build(self) -> Result<SignableOrder> {
+        let signer = self.resolve_signer_address().await?;
+        self.build_with_signer(signer).await
+    }
+
+    pub(crate) async fn build_with_signer(self, signer: Address) -> Result<SignableOrder> {
         let token_id = self
             .token_id
             .ok_or_else(|| Error::validation("token_id is required"))?;
@@ -327,7 +420,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
             order: new_order(
                 generate_salt(),
                 self.maker,
-                self.signer,
+                signer,
                 token_id,
                 to_scaled_u256(maker_amount, USDC_DECIMALS)?,
                 to_scaled_u256(taker_amount, USDC_DECIMALS)?,

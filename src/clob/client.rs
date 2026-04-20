@@ -18,7 +18,7 @@ use url::Url;
 use crate::auth::state::{Authenticated, State, Unauthenticated};
 use crate::auth::{Credentials, Kind, Normal};
 use crate::clob::order_builder::{
-    Limit, Market as MarketOrderKind, OrderBuilder, UserMarketOrder, UserOrder,
+    Limit, Market as MarketOrderKind, OrderBuilder, SignerFactory, UserMarketOrder, UserOrder,
 };
 use crate::clob::types::{
     BalanceAllowanceRequest, BanStatus, BookParams, BuilderApiKey, BuilderApiKeyResponse,
@@ -177,7 +177,7 @@ impl Default for Client<Unauthenticated> {
     }
 }
 
-#[derive(Clone, Debug, Builder, Default)]
+#[derive(Clone, Builder, Default)]
 pub struct Config {
     #[builder(default)]
     use_server_time: bool,
@@ -186,6 +186,37 @@ pub struct Config {
     #[builder(default)]
     allow_insecure: bool,
     builder: Option<BuilderConfig>,
+    signer_factory: Option<SignerFactory>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("use_server_time", &self.use_server_time)
+            .field("retry_on_error", &self.retry_on_error)
+            .field("allow_insecure", &self.allow_insecure)
+            .field("builder", &self.builder)
+            .field("has_signer_factory", &self.signer_factory.is_some())
+            .finish()
+    }
+}
+
+impl Config {
+    #[must_use]
+    pub fn get_signer<F, Fut>(mut self, factory: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<crate::clob::order_builder::DynSigner>>
+            + Send
+            + 'static,
+    {
+        self.signer_factory = Some(std::sync::Arc::new(move || Box::pin(factory())));
+        self
+    }
+
+    pub(crate) fn signer_factory(&self) -> Option<SignerFactory> {
+        self.signer_factory.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -861,6 +892,10 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.inner.builder.as_ref()
     }
 
+    pub(crate) fn signer_factory(&self) -> Option<SignerFactory> {
+        self.inner.config.signer_factory()
+    }
+
     pub(crate) async fn create_headers(&self, request: &Request) -> Result<HeaderMap> {
         auth::l2::create_headers(self.state(), request, self.inner.timestamp().await?).await
     }
@@ -1148,7 +1183,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         OrderBuilder::new(self.clone())
     }
 
-    pub async fn sign<S: Signer>(
+    pub async fn sign<S: Signer + ?Sized>(
         &self,
         signer: &S,
         signable_order: SignableOrder,
@@ -1195,7 +1230,9 @@ impl<K: Kind> Client<Authenticated<K>> {
             builder = builder.expiration(expiration);
         }
 
-        self.sign(signer, builder.build().await?).await
+        let resolved_signer = builder.resolve_signer(signer).await?;
+        let signable_order = builder.build_with_signer(resolved_signer.address()).await?;
+        self.sign(resolved_signer.as_ref(), signable_order).await
     }
 
     pub async fn create_market_order<S: Signer>(
@@ -1225,7 +1262,9 @@ impl<K: Kind> Client<Authenticated<K>> {
             builder = builder.user_usdc_balance(user_usdc_balance);
         }
 
-        self.sign(signer, builder.build().await?).await
+        let resolved_signer = builder.resolve_signer(signer).await?;
+        let signable_order = builder.build_with_signer(resolved_signer.address()).await?;
+        self.sign(resolved_signer.as_ref(), signable_order).await
     }
 
     pub async fn create_and_post_order<S: Signer>(
@@ -1257,7 +1296,9 @@ impl<K: Kind> Client<Authenticated<K>> {
                 builder = builder.expiration(expiration);
             }
 
-            let order = self.sign(signer, builder.build().await?).await?;
+            let resolved_signer = builder.resolve_signer(signer).await?;
+            let signable_order = builder.build_with_signer(resolved_signer.address()).await?;
+            let order = self.sign(resolved_signer.as_ref(), signable_order).await?;
             self.post_order_value(&order).await
         })
         .await
@@ -1292,7 +1333,9 @@ impl<K: Kind> Client<Authenticated<K>> {
                 builder = builder.user_usdc_balance(user_usdc_balance);
             }
 
-            let order = self.sign(signer, builder.build().await?).await?;
+            let resolved_signer = builder.resolve_signer(signer).await?;
+            let signable_order = builder.build_with_signer(resolved_signer.address()).await?;
+            let order = self.sign(resolved_signer.as_ref(), signable_order).await?;
             self.post_order_value(&order).await
         })
         .await

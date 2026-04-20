@@ -1,14 +1,18 @@
 mod common;
 
+use std::str::FromStr as _;
+
 use alloy::hex::ToHexExt as _;
 use alloy::primitives::{B256, U256, address};
 use polymarket_clob_client_v2::auth::state::Authenticated;
 use polymarket_clob_client_v2::auth::builder;
-use polymarket_clob_client_v2::auth::{Normal, l1, l2};
+use polymarket_clob_client_v2::auth::{Credentials, Normal, PrivateKeySigner, Signer as _, l1, l2};
 use polymarket_clob_client_v2::clob::types::{Side, SignatureTypeV2, sign_order, signing_hash};
 use polymarket_clob_client_v2::clob::types::{Order, new_order};
-use polymarket_clob_client_v2::{POLYGON, config};
+use polymarket_clob_client_v2::{AMOY, POLYGON, config};
 use reqwest::header::HeaderValue;
+use reqwest::Method;
+use uuid::Uuid;
 
 fn sample_order() -> Order {
     new_order(
@@ -24,6 +28,23 @@ fn sample_order() -> Order {
         B256::ZERO,
         B256::ZERO,
     )
+}
+
+fn vector_credentials() -> Credentials {
+    Credentials::new(
+        Uuid::nil(),
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_owned(),
+        common::PASSPHRASE.to_owned(),
+    )
+}
+
+fn request(method: Method, url: &str, body: Option<&str>) -> reqwest::Request {
+    let client = reqwest::Client::new();
+    let mut builder = client.request(method, url);
+    if let Some(body) = body {
+        builder = builder.body(body.to_owned());
+    }
+    builder.build().expect("request")
 }
 
 #[tokio::test]
@@ -49,6 +70,24 @@ async fn creates_l1_headers() {
         )
     );
     assert!(headers.get(l1::POLY_SIGNATURE).is_some());
+}
+
+#[tokio::test]
+async fn l1_headers_match_ts_amoy_vector() {
+    let signer = PrivateKeySigner::from_str(common::PRIVATE_KEY)
+        .expect("valid private key")
+        .with_chain_id(Some(AMOY));
+
+    let headers = l1::create_headers(&signer, AMOY, 10_000_000, Some(23))
+        .await
+        .expect("l1 headers");
+
+    assert_eq!(
+        headers.get(l1::POLY_SIGNATURE),
+        Some(&HeaderValue::from_static(
+            "0xf62319a987514da40e57e2f4d7529f7bac38f0355bd88bb5adbb3768d80de6c1682518e0af677d5260366425f4361e7b70c25ae232aff0ab2331e2b164a1aedc1b"
+        ))
+    );
 }
 
 #[tokio::test]
@@ -89,6 +128,68 @@ async fn creates_l2_headers() {
         )
     );
     assert!(headers.get(l2::POLY_SIGNATURE).is_some());
+}
+
+#[tokio::test]
+async fn l2_hmac_matches_ts_known_vector() {
+    let signer = common::signer();
+    let state = Authenticated::new(signer.address(), vector_credentials(), Normal::new());
+    let request = request(
+        Method::from_bytes(b"test-sign").expect("custom method"),
+        "https://example.com/orders",
+        Some("{\"hash\": \"0x123\"}"),
+    );
+
+    let headers = l2::create_headers(&state, &request, 1_000_000)
+        .await
+        .expect("l2 headers");
+
+    assert_eq!(
+        headers.get(l2::POLY_SIGNATURE),
+        Some(&HeaderValue::from_static(
+            "ZwAdJKvoYRlEKDkNMwd5BuwNNtg93kNaR_oU2HrfVvc="
+        ))
+    );
+}
+
+#[tokio::test]
+async fn l2_headers_without_body_match_expected_signature() {
+    let signer = common::signer();
+    let state = Authenticated::new(signer.address(), vector_credentials(), Normal::new());
+    let request = request(Method::GET, "https://example.com/order", None);
+
+    let headers = l2::create_headers(&state, &request, 1_000_000)
+        .await
+        .expect("l2 headers");
+
+    assert_eq!(
+        headers.get(l2::POLY_SIGNATURE),
+        Some(&HeaderValue::from_static(
+            "fBe-xXz0q8hWO7dVwXYL0VVBY3psQE5aj_uoE1hZt08="
+        ))
+    );
+}
+
+#[tokio::test]
+async fn l2_headers_with_body_match_expected_signature() {
+    let signer = common::signer();
+    let state = Authenticated::new(signer.address(), vector_credentials(), Normal::new());
+    let request = request(
+        Method::POST,
+        "https://example.com/orders",
+        Some("{\"hash\": \"0x123\"}"),
+    );
+
+    let headers = l2::create_headers(&state, &request, 1_000_000)
+        .await
+        .expect("l2 headers");
+
+    assert_eq!(
+        headers.get(l2::POLY_SIGNATURE),
+        Some(&HeaderValue::from_static(
+            "wdXSC4akzPKG0yFk9FJrIb7-rg73v_M7QDxIBp-P1CQ="
+        ))
+    );
 }
 
 #[tokio::test]

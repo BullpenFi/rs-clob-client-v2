@@ -82,7 +82,7 @@ pub fn signing_hash(order: &Order, chain_id: ChainId, verifying_contract: Addres
     order.eip712_signing_hash(&signing_domain(chain_id, verifying_contract))
 }
 
-pub async fn sign_order<S: Signer>(
+pub async fn sign_order<S: Signer + ?Sized>(
     signer: &S,
     order: &Order,
     chain_id: ChainId,

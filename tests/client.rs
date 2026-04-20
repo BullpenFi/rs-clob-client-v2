@@ -3,10 +3,13 @@ mod common;
 use std::str::FromStr as _;
 
 use alloy::primitives::{U256, address};
-use httpmock::Method::{GET, POST};
+use httpmock::Method::{DELETE, GET, POST};
 use httpmock::MockServer;
 use polymarket_clob_client_v2::clob::{Client, Config};
-use polymarket_clob_client_v2::clob::types::{OrderType, Side, SignatureTypeV2};
+use polymarket_clob_client_v2::clob::types::{
+    AssetType, BalanceAllowanceRequest, OpenOrdersRequest, OrderType, Side, SignatureTypeV2,
+    TickSize,
+};
 use polymarket_clob_client_v2::types::Decimal;
 use tokio::time::{Duration, sleep};
 
@@ -19,6 +22,30 @@ fn retrying_insecure_config() -> Config {
         .allow_insecure(true)
         .retry_on_error(true)
         .build()
+}
+
+fn dec(value: &str) -> Decimal {
+    Decimal::from_str(value).expect("decimal")
+}
+
+fn sample_open_order_json(id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "status": "live",
+        "owner": "00000000-0000-0000-0000-000000000000",
+        "maker_address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "market": "market-1",
+        "asset_id": "123",
+        "side": "BUY",
+        "original_size": "10",
+        "size_matched": "0",
+        "price": "0.45",
+        "associate_trades": [],
+        "outcome": "YES",
+        "created_at": 1700000000,
+        "expiration": "0",
+        "order_type": "GTC"
+    })
 }
 
 #[test]
@@ -266,4 +293,305 @@ async fn calculate_market_price_matches_ts_sell_cutoff_logic() {
 
     mock.assert();
     assert_eq!(price, Decimal::from_str("0.40").expect("decimal"));
+}
+
+#[tokio::test]
+async fn server_time_returns_timestamp() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/time");
+        then.status(200).body("1700000000");
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let timestamp = client.server_time().await.expect("server time");
+
+    mock.assert();
+    assert_eq!(timestamp, 1_700_000_000);
+}
+
+#[tokio::test]
+async fn version_returns_and_caches() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/version");
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "version": 7 }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let first = client.version().await.expect("version");
+    let second = client.version().await.expect("cached version");
+
+    mock.assert_calls(1);
+    assert_eq!(first, 7);
+    assert_eq!(second, 7);
+}
+
+#[tokio::test]
+async fn midpoint_returns_decimal() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/midpoint")
+            .query_param("token_id", "321");
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "mid": "0.53" }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let midpoint = client
+        .midpoint(U256::from(321_u64))
+        .await
+        .expect("midpoint");
+
+    mock.assert();
+    assert_eq!(midpoint.mid, dec("0.53"));
+}
+
+#[tokio::test]
+async fn price_returns_decimal() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/price")
+            .query_param("token_id", "322")
+            .query_param("side", "BUY");
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "price": "0.61" }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let price = client
+        .price(U256::from(322_u64), Side::Buy)
+        .await
+        .expect("price");
+
+    mock.assert();
+    assert_eq!(price.price, dec("0.61"));
+}
+
+#[tokio::test]
+async fn order_book_returns_bids_asks() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/book")
+            .query_param("token_id", "323");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "market": "market-1",
+            "asset_id": "323",
+            "timestamp": "1700000000",
+            "bids": [{ "price": "0.45", "size": "100" }],
+            "asks": [{ "price": "0.55", "size": "100" }],
+            "min_order_size": "1",
+            "tick_size": "0.01",
+            "neg_risk": false,
+            "hash": null
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let book = client
+        .order_book(U256::from(323_u64))
+        .await
+        .expect("order book");
+
+    mock.assert();
+    assert_eq!(book.bids.len(), 1);
+    assert_eq!(book.asks.len(), 1);
+    assert_eq!(book.bids[0].price, dec("0.45"));
+    assert_eq!(book.asks[0].price, dec("0.55"));
+}
+
+#[tokio::test]
+async fn post_order_deserializes_camel_case() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/order");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "success": true,
+            "errorMsg": "",
+            "orderID": "order-1",
+            "transactionsHashes": ["0xabc"],
+            "status": "live",
+            "takingAmount": "100",
+            "makingAmount": "45"
+        }));
+    });
+
+    let signer = common::signer();
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let token_id = U256::from(324_u64);
+    client.set_tick_size(token_id, TickSize::Hundredth);
+    client.set_neg_risk(token_id, false);
+
+    let signed = client
+        .create_order(
+            &signer,
+            polymarket_clob_client_v2::clob::UserOrder::builder()
+                .token_id(token_id)
+                .price(dec("0.45"))
+                .size(dec("10"))
+                .side(Side::Buy)
+                .build(),
+        )
+        .await
+        .expect("signed order");
+
+    let response = client.post_order(&signed).await.expect("post order");
+
+    mock.assert();
+    assert!(response.success);
+    assert_eq!(response.order_id, "order-1");
+    assert_eq!(response.transactions_hashes, vec!["0xabc".to_owned()]);
+    assert_eq!(response.taking_amount, "100");
+    assert_eq!(response.making_amount, "45");
+}
+
+#[tokio::test]
+async fn cancel_order_sends_order_id() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(DELETE)
+            .path("/order")
+            .json_body_obj(&serde_json::json!({ "orderID": "order-1" }));
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "canceled": true }));
+    });
+
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let response = client
+        .cancel_order("order-1".to_owned())
+        .await
+        .expect("cancel order");
+
+    mock.assert();
+    assert_eq!(response["canceled"], true);
+}
+
+#[tokio::test]
+async fn cancel_all_sends_empty_body() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(DELETE).path("/cancel-all").body("");
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "canceled": true }));
+    });
+
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let response = client.cancel_all().await.expect("cancel all");
+
+    mock.assert();
+    assert_eq!(response["canceled"], true);
+}
+
+#[tokio::test]
+async fn pagination_collects_all_pages() {
+    let server = MockServer::start();
+    let first = server.mock(|when, then| {
+        when.method(GET)
+            .path("/data/orders")
+            .query_param("next_cursor", "MA==");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 2,
+            "next_cursor": "MQ==",
+            "data": [sample_open_order_json("order-1")]
+        }));
+    });
+    let second = server.mock(|when, then| {
+        when.method(GET)
+            .path("/data/orders")
+            .query_param("next_cursor", "MQ==");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 2,
+            "next_cursor": "LTE=",
+            "data": [sample_open_order_json("order-2")]
+        }));
+    });
+
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let orders = client
+        .open_orders(
+            &OpenOrdersRequest::builder()
+                .market("market-1".to_owned())
+                .build(),
+        )
+        .await
+        .expect("open orders");
+
+    first.assert_calls(1);
+    second.assert_calls(1);
+    assert_eq!(orders.len(), 2);
+    assert_eq!(orders[0].id, "order-1");
+    assert_eq!(orders[1].id, "order-2");
+}
+
+#[tokio::test]
+async fn pagination_stops_on_empty_page() {
+    let server = MockServer::start();
+    let first = server.mock(|when, then| {
+        when.method(GET)
+            .path("/data/orders")
+            .query_param("next_cursor", "MA==");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 0,
+            "next_cursor": "MQ==",
+            "data": []
+        }));
+    });
+    let second = server.mock(|when, then| {
+        when.method(GET)
+            .path("/data/orders")
+            .query_param("next_cursor", "MQ==");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 1,
+            "next_cursor": "LTE=",
+            "data": [sample_open_order_json("order-should-not-load")]
+        }));
+    });
+
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let orders = client
+        .open_orders(
+            &OpenOrdersRequest::builder()
+                .market("market-1".to_owned())
+                .build(),
+        )
+        .await
+        .expect("open orders");
+
+    first.assert_calls(1);
+    second.assert_calls(0);
+    assert!(orders.is_empty());
+}
+
+#[tokio::test]
+async fn balance_allowance_returns_values() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/balance-allowance");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "balance": "100.5",
+            "allowance": "75.25"
+        }));
+    });
+
+    let client = common::create_authenticated(&server.base_url(), insecure_config()).await;
+    let response = client
+        .balance_allowance(
+            &BalanceAllowanceRequest::builder()
+                .asset_type(AssetType::Collateral)
+                .build(),
+        )
+        .await
+        .expect("balance allowance");
+
+    mock.assert();
+    assert_eq!(response.balance, "100.5");
+    assert_eq!(response.allowance, "75.25");
 }
