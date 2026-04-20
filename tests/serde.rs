@@ -52,7 +52,7 @@ fn market_details_shorthand_fields() {
             "t": [{ "t": "123", "o": "YES" }, null],
             "mts": 0.01,
             "nr": false,
-            "fd": { "r": "0.02", "e": 1, "to": true },
+            "fd": { "r": 0.02, "e": 1, "to": true },
             "mbf": 1,
             "tbf": "2"
         }"#,
@@ -79,7 +79,7 @@ fn market_details_shorthand_fields() {
             "t": [{ "t": "123", "o": "YES" }, null],
             "mts": 0.01,
             "nr": false,
-            "fd": { "r": "0.02", "e": 1, "to": true },
+            "fd": { "r": 0.02, "e": 1, "to": true },
             "mbf": 1,
             "tbf": 2
         })

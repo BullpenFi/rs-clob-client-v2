@@ -66,6 +66,17 @@ fn client_allows_non_https_hosts_when_explicitly_enabled() {
     assert_eq!(client.host().as_str(), "http://example.com/");
 }
 
+#[test]
+fn client_rejects_non_http_schemes_even_when_insecure_is_enabled() {
+    let error =
+        Client::new("ftp://example.com", insecure_config()).expect_err("ftp should still fail");
+    assert!(
+        error
+            .to_string()
+            .contains("client host URLs must use http:// or https://")
+    );
+}
+
 #[tokio::test]
 async fn public_ok_endpoint_works_against_httpmock() {
     let server = MockServer::start();
@@ -81,6 +92,88 @@ async fn public_ok_endpoint_works_against_httpmock() {
 
     mock.assert();
     assert_eq!(response, "OK");
+}
+
+#[tokio::test]
+async fn builder_fees_is_public_on_unauthenticated_client() {
+    const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/fees/builder-fees/{BUILDER_CODE}"));
+        then.status(200).json_body_obj(&serde_json::json!({
+            "builder_maker_fee_rate_bps": 25,
+            "builder_taker_fee_rate_bps": 50
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let response = client
+        .builder_fees(BUILDER_CODE)
+        .await
+        .expect("builder fees");
+
+    mock.assert();
+    assert_eq!(response.builder_maker_fee_rate_bps, 25);
+    assert_eq!(response.builder_taker_fee_rate_bps, 50);
+}
+
+#[tokio::test]
+async fn rewards_market_reads_are_public_on_unauthenticated_client() {
+    let server = MockServer::start();
+    let current = server.mock(|when, then| {
+        when.method(GET).path("/rewards/markets/current");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 1,
+            "next_cursor": "LTE=",
+            "data": [{
+                "condition_id": "condition-1",
+                "question": "Question?",
+                "market_slug": "market-1",
+                "event_slug": "event-1",
+                "image": "",
+                "rewards_max_spread": "0.01",
+                "rewards_min_size": "10",
+                "tokens": [],
+                "rewards_config": []
+            }]
+        }));
+    });
+    let raw = server.mock(|when, then| {
+        when.method(GET).path("/rewards/markets/condition-1");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "limit": 1,
+            "count": 1,
+            "next_cursor": "LTE=",
+            "data": [{
+                "condition_id": "condition-1",
+                "question": "Question?",
+                "market_slug": "market-1",
+                "event_slug": "event-1",
+                "image": "",
+                "rewards_max_spread": "0.01",
+                "rewards_min_size": "10",
+                "tokens": [],
+                "rewards_config": []
+            }]
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let current_rewards = client.current_rewards().await.expect("current rewards");
+    let raw_rewards = client
+        .raw_rewards_for_market("condition-1")
+        .await
+        .expect("raw rewards");
+
+    current.assert();
+    raw.assert();
+    assert_eq!(current_rewards.len(), 1);
+    assert_eq!(raw_rewards.len(), 1);
+    assert_eq!(current_rewards[0].condition_id, "condition-1");
+    assert_eq!(raw_rewards[0].condition_id, "condition-1");
 }
 
 #[tokio::test]

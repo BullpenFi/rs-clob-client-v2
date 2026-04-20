@@ -274,12 +274,7 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
                 "price has too many decimal places for tick size {tick_size}"
             )));
         }
-        if price < minimum_tick_size || price > Decimal::ONE - minimum_tick_size {
-            return Err(Error::validation(format!(
-                "price {price} must be between {minimum_tick_size} and {}",
-                Decimal::ONE - minimum_tick_size
-            )));
-        }
+        validate_price_bounds(price, minimum_tick_size)?;
 
         let order_type = self.order_type.unwrap_or(OrderType::Gtc);
         let post_only = self.post_only.unwrap_or(false);
@@ -387,6 +382,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         };
 
         validate_price(price)?;
+        validate_price_bounds(price, tick_size.as_decimal())?;
         let round_config = tick_size.round_config();
         let amount = if side == Side::Buy {
             match self.user_usdc_balance {
@@ -445,6 +441,17 @@ fn validate_price(price: Decimal) -> Result<()> {
     if price <= Decimal::ZERO {
         return Err(Error::validation("price must be positive"));
     }
+    Ok(())
+}
+
+fn validate_price_bounds(price: Decimal, minimum_tick_size: Decimal) -> Result<()> {
+    if price < minimum_tick_size || price > Decimal::ONE - minimum_tick_size {
+        return Err(Error::validation(format!(
+            "price {price} must be between {minimum_tick_size} and {}",
+            Decimal::ONE - minimum_tick_size
+        )));
+    }
+
     Ok(())
 }
 

@@ -6,7 +6,9 @@
 use std::str::FromStr as _;
 
 use bon::Builder;
+use rust_decimal::prelude::ToPrimitive as _;
 use serde::de::Error as _;
+use serde::ser::Error as _;
 use serde::{Deserialize, Serialize};
 
 use crate::clob::types::TickSize;
@@ -113,12 +115,37 @@ pub struct ClobToken {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct FeeDetails {
-    #[serde(rename = "r", deserialize_with = "deserialize_optional_decimal")]
+    #[serde(
+        rename = "r",
+        deserialize_with = "deserialize_optional_decimal",
+        serialize_with = "serialize_optional_decimal_as_number"
+    )]
     pub rate: Option<Decimal>,
     #[serde(rename = "e")]
     pub exponent: Option<u32>,
     #[serde(rename = "to")]
     pub taker_only: bool,
+}
+
+#[allow(
+    clippy::ref_option,
+    reason = "serde serialize_with hooks for optional fields receive &Option<T>"
+)]
+fn serialize_optional_decimal_as_number<S>(
+    value: &Option<Decimal>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(value) => serializer.serialize_some(
+            &value
+                .to_f64()
+                .ok_or_else(|| S::Error::custom("decimal cannot be represented as f64"))?,
+        ),
+        None => serializer.serialize_none(),
+    }
 }
 
 #[non_exhaustive]

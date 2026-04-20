@@ -53,6 +53,18 @@ fn builder_fee_rate_from_bps(rate_bps: u32) -> f64 {
         .unwrap_or_default()
 }
 
+fn validate_host_scheme(host: &Url, allow_insecure: bool) -> Result<()> {
+    match (host.scheme(), allow_insecure) {
+        ("https", _) | ("http", true) => Ok(()),
+        ("http", false) => Err(Error::validation(
+            "only HTTPS URLs are accepted; set allow_insecure for local dev",
+        )),
+        _ => Err(Error::validation(
+            "client host URLs must use http:// or https://",
+        )),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateApiKeyResponse {
     #[serde(rename = "apiKey")]
@@ -833,6 +845,74 @@ impl<S: State> Client<S> {
             .map(|fee_info| fee_info.clone())
             .ok_or_else(|| Error::validation("missing fee info for token"))
     }
+
+    pub async fn builder_fees(
+        &self,
+        builder_code: &str,
+    ) -> Result<crate::clob::types::BuilderFeesResponse> {
+        if let Some(rate) = self.inner.builder_fee_rates.get(builder_code) {
+            return Ok(crate::clob::types::BuilderFeesResponse {
+                builder_maker_fee_rate_bps: builder_fee_rate_to_bps(rate.maker),
+                builder_taker_fee_rate_bps: builder_fee_rate_to_bps(rate.taker),
+            });
+        }
+
+        let response: crate::clob::types::BuilderFeesResponse = self
+            .get(
+                &format!("/fees/builder-fees/{builder_code}"),
+                Option::<&()>::None,
+            )
+            .await?;
+
+        self.inner.builder_fee_rates.insert(
+            builder_code.to_owned(),
+            BuilderFeeRate {
+                maker: builder_fee_rate_from_bps(response.builder_maker_fee_rate_bps),
+                taker: builder_fee_rate_from_bps(response.builder_taker_fee_rate_bps),
+            },
+        );
+
+        Ok(response)
+    }
+
+    pub async fn current_rewards(&self) -> Result<Vec<crate::clob::types::MarketReward>> {
+        #[derive(Serialize)]
+        struct Query {
+            next_cursor: Option<String>,
+        }
+
+        self.collect_pages(|cursor| async {
+            self.get(
+                "/rewards/markets/current",
+                Some(&Query {
+                    next_cursor: cursor,
+                }),
+            )
+            .await
+        })
+        .await
+    }
+
+    pub async fn raw_rewards_for_market(
+        &self,
+        condition_id: &str,
+    ) -> Result<Vec<crate::clob::types::MarketReward>> {
+        #[derive(Serialize)]
+        struct Query {
+            next_cursor: Option<String>,
+        }
+
+        self.collect_pages(|cursor| async {
+            self.get(
+                &format!("/rewards/markets/{condition_id}"),
+                Some(&Query {
+                    next_cursor: cursor,
+                }),
+            )
+            .await
+        })
+        .await
+    }
 }
 
 impl Client<Unauthenticated> {
@@ -844,11 +924,7 @@ impl Client<Unauthenticated> {
         };
 
         let host = Url::parse(&normalized_host)?;
-        if host.scheme() != "https" && !config.allow_insecure {
-            return Err(Error::validation(
-                "only HTTPS URLs are accepted; set allow_insecure for local dev",
-            ));
-        }
+        validate_host_scheme(&host, config.allow_insecure)?;
         let mut default_headers = HeaderMap::new();
         default_headers.insert(
             "User-Agent",
@@ -1461,35 +1537,6 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.auth_post("/auth/builder-api-key", &()).await
     }
 
-    pub async fn builder_fees(
-        &self,
-        builder_code: &str,
-    ) -> Result<crate::clob::types::BuilderFeesResponse> {
-        if let Some(rate) = self.inner.builder_fee_rates.get(builder_code) {
-            return Ok(crate::clob::types::BuilderFeesResponse {
-                builder_maker_fee_rate_bps: builder_fee_rate_to_bps(rate.maker),
-                builder_taker_fee_rate_bps: builder_fee_rate_to_bps(rate.taker),
-            });
-        }
-
-        let response: crate::clob::types::BuilderFeesResponse = self
-            .get(
-                &format!("/fees/builder-fees/{builder_code}"),
-                Option::<&()>::None,
-            )
-            .await?;
-
-        self.inner.builder_fee_rates.insert(
-            builder_code.to_owned(),
-            BuilderFeeRate {
-                maker: builder_fee_rate_from_bps(response.builder_maker_fee_rate_bps),
-                taker: builder_fee_rate_from_bps(response.builder_taker_fee_rate_bps),
-            },
-        );
-
-        Ok(response)
-    }
-
     pub async fn builder_api_keys(&self) -> Result<Vec<BuilderApiKeyResponse>> {
         self.auth_get("/auth/builder-api-key", Option::<&()>::None)
             .await
@@ -1656,58 +1703,23 @@ impl<K: Kind> Client<Authenticated<K>> {
         .await
     }
 
-    pub async fn current_rewards(&self) -> Result<Vec<crate::clob::types::MarketReward>> {
-        #[derive(Serialize)]
-        struct Query {
-            next_cursor: Option<String>,
-        }
-
-        self.collect_pages(|cursor| async {
-            self.get(
-                "/rewards/markets/current",
-                Some(&Query {
-                    next_cursor: cursor,
-                }),
-            )
-            .await
-        })
-        .await
-    }
-
-    pub async fn raw_rewards_for_market(
-        &self,
-        condition_id: &str,
-    ) -> Result<Vec<crate::clob::types::MarketReward>> {
-        #[derive(Serialize)]
-        struct Query {
-            next_cursor: Option<String>,
-        }
-
-        self.collect_pages(|cursor| async {
-            self.get(
-                &format!("/rewards/markets/{condition_id}"),
-                Some(&Query {
-                    next_cursor: cursor,
-                }),
-            )
-            .await
-        })
-        .await
-    }
-
     async fn retry_order_submission<F, Fut>(&self, mut submit: F) -> Result<OrderResponse>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Value>>,
     {
-        let response = submit().await?;
-        if is_order_version_mismatch(&response) {
+        let initial_version = self.version().await?;
+        let response = submit().await;
+
+        if is_order_version_mismatch_result(&response) {
             self.invalidate_cached_version();
-            let _: u32 = self.version().await?;
-            return deserialize_order_response(submit().await?);
+            let refreshed_version = self.version().await?;
+            if refreshed_version != initial_version {
+                return deserialize_order_submission(submit().await);
+            }
         }
 
-        deserialize_order_response(response)
+        deserialize_order_submission(response)
     }
 
     fn invalidate_cached_version(&self) {
@@ -1795,6 +1807,33 @@ fn is_order_version_mismatch(value: &Value) -> bool {
     })
 }
 
+fn is_order_version_mismatch_error(error: &Error) -> bool {
+    error
+        .downcast_ref::<crate::error::Status>()
+        .is_some_and(|status| {
+            status.body.as_ref().is_some_and(is_order_version_mismatch)
+                || status
+                    .raw_body
+                    .as_deref()
+                    .is_some_and(|raw| raw.contains(ORDER_VERSION_MISMATCH_ERROR))
+                || status.message.contains(ORDER_VERSION_MISMATCH_ERROR)
+        })
+}
+
+fn is_order_version_mismatch_result(result: &Result<Value>) -> bool {
+    match result {
+        Ok(value) => is_order_version_mismatch(value),
+        Err(error) => is_order_version_mismatch_error(error),
+    }
+}
+
+fn deserialize_order_submission(result: Result<Value>) -> Result<OrderResponse> {
+    match result {
+        Ok(value) => deserialize_order_response(value),
+        Err(error) => Err(error),
+    }
+}
+
 fn deserialize_order_response(value: Value) -> Result<OrderResponse> {
     if is_order_version_mismatch(&value) {
         let message = value
@@ -1854,8 +1893,7 @@ mod tests {
                 .json_body_obj(&serde_json::json!({ "version": 2 }));
         });
         let client = authenticated_client(&server).await;
-
-        assert_eq!(client.version().await.expect("version"), 2);
+        client.inner.cached_version.store(1, Ordering::Relaxed);
 
         let attempts = Arc::new(AtomicUsize::new(0));
         let response = client
@@ -1864,7 +1902,17 @@ mod tests {
                 async move {
                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                     if attempt == 0 {
-                        Ok(serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR }))
+                        Err(Error::status_with_payload(
+                            reqwest::StatusCode::BAD_REQUEST,
+                            Method::POST,
+                            "/order".to_owned(),
+                            ORDER_VERSION_MISMATCH_ERROR,
+                            Some(serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR })),
+                            Some(
+                                serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR })
+                                    .to_string(),
+                            ),
+                        ))
                     } else {
                         Ok(serde_json::json!({
                             "success": true,
@@ -1883,6 +1931,44 @@ mod tests {
 
         assert_eq!(response.order_id, "retry-ok");
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        version.assert_calls(2);
+        version.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn retry_order_submission_does_not_retry_when_version_is_unchanged() {
+        let server = MockServer::start();
+        let version = server.mock(|when, then| {
+            when.method(GET).path("/version");
+            then.status(200)
+                .json_body_obj(&serde_json::json!({ "version": 2 }));
+        });
+        let client = authenticated_client(&server).await;
+        client.inner.cached_version.store(2, Ordering::Relaxed);
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let error = client
+            .retry_order_submission(|| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Err(Error::status_with_payload(
+                        reqwest::StatusCode::BAD_REQUEST,
+                        Method::POST,
+                        "/order".to_owned(),
+                        ORDER_VERSION_MISMATCH_ERROR,
+                        Some(serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR })),
+                        Some(
+                            serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR })
+                                .to_string(),
+                        ),
+                    ))
+                }
+            })
+            .await
+            .expect_err("unchanged version should not retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        version.assert_calls(1);
+        assert_eq!(error.kind(), crate::Kind::Status);
     }
 }

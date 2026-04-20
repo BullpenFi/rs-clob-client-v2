@@ -61,6 +61,35 @@ async fn limit_order_builder_rejects_price_decimal_places_smaller_than_tick_size
 }
 
 #[tokio::test]
+async fn market_order_builder_rejects_prices_outside_tick_bounds() {
+    let client = common::create_authenticated(common::TEST_HOST, Config::default()).await;
+    let token_id = U256::from(125_u64);
+    client.set_tick_size(token_id, TickSize::Hundredth);
+    client.set_neg_risk(token_id, false);
+
+    for price in ["0.009", "0.991"] {
+        let error = client
+            .market_order()
+            .token_id(token_id)
+            .price(Decimal::from_str(price).expect("decimal"))
+            .amount(Decimal::from_str("10").expect("decimal"))
+            .side(Side::Buy)
+            .build()
+            .await
+            .expect_err("out-of-range price should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("price 0.009 must be between 0.01 and 0.99")
+                || error
+                    .to_string()
+                    .contains("price 0.991 must be between 0.01 and 0.99")
+        );
+    }
+}
+
+#[tokio::test]
 async fn create_market_order_adjusts_buy_amount_for_builder_fees() {
     const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
