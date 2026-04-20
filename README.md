@@ -1,9 +1,12 @@
 # rs-clob-client-v2
 
-Rust rewrite of Polymarket's `@polymarket/clob-client-v2`, following the architecture and idioms of Polymarket's official Rust V1 SDK.
+Bullpen.fi's Rust implementation of Polymarket's `@polymarket/clob-client-v2`.
+
+This repository is maintained by Bullpen.fi. It is not an official Polymarket release, but it is built to mirror the architecture and idioms of Polymarket's official Rust V1 SDK and to track the V2 TypeScript client closely.
 
 ## Status
 
+- Maintained by Bullpen.fi as an unofficial Rust implementation of Polymarket CLOB V2
 - V2-only client surface
 - Type-state client with authenticated and unauthenticated modes
 - `alloy`-based L1 auth and V2 EIP-712 order signing
@@ -83,4 +86,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - Default: REST client and V2 order builder
 - `ws`: generic WebSocket transport and CLOB subscription scaffolding
-- `tracing`: reserved for trace instrumentation
