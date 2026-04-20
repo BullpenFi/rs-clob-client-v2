@@ -332,3 +332,4 @@ tracing = ["dep:tracing"]
 | 2026-04-19 | Phase 7 | Completed | Added builder API key/trade endpoints plus rewards and scoring APIs on the authenticated client. `cargo check` passes. |
 | 2026-04-19 | Phase 8 | Completed | Added feature-gated generic WebSocket transport plus CLOB orderbook/user subscription scaffolding. `cargo check --features ws` passes. |
 | 2026-04-19 | Phase 9 | Completed | Added README/examples/test coverage, fixed auth/order-builder polish issues, and verified `cargo test`, `cargo clippy -- -D warnings`, `cargo clippy --features ws -- -D warnings`, and `cargo doc --no-deps`. |
+| 2026-04-19 | — | **CLOSED** | Full implementation landed. 4-way audit (architecture, code quality, security, build verification) completed. 2 P0 correctness bugs, 6 P1 issues, 7 P2 issues, and 5 P3 issues identified. Follow-up work tracked in `0002-polish-and-qa.md`. |
