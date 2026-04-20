@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{future::Future, str::FromStr};
 
 use alloy::primitives::U256;
@@ -7,10 +8,11 @@ use bon::Builder;
 use dashmap::DashMap;
 use reqwest::header::HeaderMap;
 use reqwest::{Client as ReqwestClient, Method, Request};
+use rust_decimal::prelude::ToPrimitive as _;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
 use serde::Deserialize;
+use serde_json::Value;
 use url::Url;
 
 use crate::auth::state::{Authenticated, State, Unauthenticated};
@@ -36,8 +38,13 @@ use crate::error::{Error, Kind as ErrorKind};
 use crate::types::{Address, Decimal};
 use crate::{Result, Timestamp, auth};
 
-fn read_lock<T: Copy>(lock: &RwLock<T>) -> T {
-    *lock.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+const ORDER_VERSION_MISMATCH_ERROR: &str = "order_version_mismatch";
+const UNSET_VERSION: u32 = u32::MAX;
+
+fn builder_fee_rate_to_bps(rate: f64) -> u32 {
+    let scaled =
+        Decimal::from_str(&rate.to_string()).unwrap_or(Decimal::ZERO) * Decimal::from(10_000_u32);
+    scaled.round_dp(0).to_u32().unwrap_or_default()
 }
 
 pub struct AuthenticationBuilder<'signer, S: Signer, K: Kind = Normal> {
@@ -113,7 +120,7 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
         };
 
         let state = Authenticated::new(self.signer.address(), credentials, self.kind);
-        let cached_version = read_lock(&inner.cached_version);
+        let cached_version = inner.cached_version.load(Ordering::Relaxed);
 
         Ok(Client {
             inner: Arc::new(ClientInner {
@@ -124,12 +131,13 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
                 tick_sizes: inner.tick_sizes.clone(),
                 neg_risk: inner.neg_risk.clone(),
                 fee_infos: inner.fee_infos.clone(),
+                fee_rate_bps: inner.fee_rate_bps.clone(),
                 token_condition_map: inner.token_condition_map.clone(),
                 builder_fee_rates: inner.builder_fee_rates.clone(),
                 funder: self.funder,
                 signature_type: self.signature_type.unwrap_or(SignatureTypeV2::Eoa),
                 builder: inner.builder.clone(),
-                cached_version: RwLock::new(cached_version),
+                cached_version: AtomicU32::new(cached_version),
             }),
         })
     }
@@ -154,7 +162,7 @@ pub struct Config {
     #[builder(default)]
     retry_on_error: bool,
     #[builder(default)]
-    throw_on_error: bool,
+    allow_insecure: bool,
     builder: Option<BuilderConfig>,
 }
 
@@ -167,12 +175,13 @@ pub(crate) struct ClientInner<S: State> {
     tick_sizes: DashMap<U256, TickSize>,
     neg_risk: DashMap<U256, bool>,
     fee_infos: DashMap<U256, FeeInfo>,
+    fee_rate_bps: DashMap<U256, u32>,
     token_condition_map: DashMap<U256, String>,
     builder_fee_rates: DashMap<String, BuilderFeeRate>,
     funder: Option<Address>,
     signature_type: SignatureTypeV2,
     builder: Option<BuilderConfig>,
-    cached_version: RwLock<Option<u32>>,
+    cached_version: AtomicU32,
 }
 
 impl<S: State> ClientInner<S> {
@@ -282,6 +291,7 @@ impl<S: State> Client<S> {
         self.inner.tick_sizes.clear();
         self.inner.neg_risk.clear();
         self.inner.fee_infos.clear();
+        self.inner.fee_rate_bps.clear();
         self.inner.token_condition_map.clear();
         self.inner.builder_fee_rates.clear();
     }
@@ -300,11 +310,6 @@ impl<S: State> Client<S> {
 
     pub fn set_token_condition(&self, token_id: U256, condition_id: String) {
         self.inner.token_condition_map.insert(token_id, condition_id);
-    }
-
-    #[must_use]
-    pub fn throw_on_error(&self) -> bool {
-        self.inner.config.throw_on_error
     }
 
     pub async fn server_time(&self) -> Result<Timestamp> {
@@ -336,12 +341,22 @@ impl<S: State> Client<S> {
         F: FnMut(Option<String>) -> Fut,
         Fut: Future<Output = Result<Page<T>>>,
     {
+        const MAX_PAGES: usize = 1000;
         let mut cursor = Some("MA==".to_owned());
         let mut items = Vec::new();
+        let mut pages = 0_usize;
 
         while cursor.as_deref() != Some("LTE=") {
+            if pages >= MAX_PAGES {
+                return Err(Error::validation("pagination exceeded maximum page limit"));
+            }
+
             let page = fetcher(cursor.clone()).await?;
+            pages += 1;
             cursor = Some(page.next_cursor.clone());
+            if page.data.is_empty() {
+                break;
+            }
             items.extend(page.data);
         }
 
@@ -353,7 +368,8 @@ impl<S: State> Client<S> {
     }
 
     pub async fn version(&self) -> Result<u32> {
-        if let Some(version) = read_lock(&self.inner.cached_version) {
+        let version = self.inner.cached_version.load(Ordering::Relaxed);
+        if version != UNSET_VERSION {
             return Ok(version);
         }
 
@@ -363,11 +379,9 @@ impl<S: State> Client<S> {
             .version
             .unwrap_or(2);
 
-        *self
-            .inner
+        self.inner
             .cached_version
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version);
+            .store(version, Ordering::Relaxed);
         Ok(version)
     }
 
@@ -436,11 +450,11 @@ impl<S: State> Client<S> {
 
                 let fee_info = details.fee_details.as_ref().map_or(
                     FeeInfo {
-                        rate: 0,
+                        rate: Decimal::ZERO,
                         exponent: 0,
                     },
                     |fee| FeeInfo {
-                        rate: fee.rate.unwrap_or(0),
+                        rate: fee.rate.unwrap_or(Decimal::ZERO),
                         exponent: fee.exponent.unwrap_or(0),
                     },
                 );
@@ -514,8 +528,8 @@ impl<S: State> Client<S> {
     }
 
     pub async fn fee_rate_bps(&self, token_id: U256) -> Result<u32> {
-        if let Some(fee_info) = self.inner.fee_infos.get(&token_id) {
-            return Ok(fee_info.rate);
+        if let Some(base_fee) = self.inner.fee_rate_bps.get(&token_id) {
+            return Ok(*base_fee);
         }
 
         #[derive(Serialize)]
@@ -531,14 +545,7 @@ impl<S: State> Client<S> {
                 }),
             )
             .await?;
-        let exponent = self.inner.fee_infos.get(&token_id).map_or(0, |info| info.exponent);
-        self.inner.fee_infos.insert(
-            token_id,
-            FeeInfo {
-                rate: response.base_fee,
-                exponent,
-            },
-        );
+        self.inner.fee_rate_bps.insert(token_id, response.base_fee);
         Ok(response.base_fee)
     }
 
@@ -702,6 +709,19 @@ impl<S: State> Client<S> {
         self.clob_market_info(&response.condition_id).await?;
         Ok(())
     }
+
+    pub(crate) async fn platform_fee_info(&self, token_id: U256) -> Result<FeeInfo> {
+        if let Some(fee_info) = self.inner.fee_infos.get(&token_id) {
+            return Ok(fee_info.clone());
+        }
+
+        self.ensure_market_info_cached(token_id).await?;
+        self.inner
+            .fee_infos
+            .get(&token_id)
+            .map(|fee_info| fee_info.clone())
+            .ok_or_else(|| Error::validation("missing fee info for token"))
+    }
 }
 
 impl Client<Unauthenticated> {
@@ -713,6 +733,11 @@ impl Client<Unauthenticated> {
         };
 
         let host = Url::parse(&normalized_host)?;
+        if host.scheme() != "https" && !config.allow_insecure {
+            return Err(Error::validation(
+                "only HTTPS URLs are accepted; set allow_insecure for local dev",
+            ));
+        }
         let builder = config.builder.clone();
         Ok(Client {
             inner: Arc::new(ClientInner {
@@ -723,12 +748,13 @@ impl Client<Unauthenticated> {
                 tick_sizes: DashMap::new(),
                 neg_risk: DashMap::new(),
                 fee_infos: DashMap::new(),
+                fee_rate_bps: DashMap::new(),
                 token_condition_map: DashMap::new(),
                 builder_fee_rates: DashMap::new(),
                 funder: None,
                 signature_type: SignatureTypeV2::Eoa,
                 builder,
-                cached_version: RwLock::new(None),
+                cached_version: AtomicU32::new(UNSET_VERSION),
             }),
         })
     }
@@ -1073,7 +1099,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.auth_get("/balance-allowance", Some(&query)).await
     }
 
-    pub async fn update_balance_allowance(&self, request: &BalanceAllowanceRequest) -> Result<()> {
+    pub async fn update_balance_allowance(&self, request: &BalanceAllowanceRequest) -> Result<Value> {
         let mut query = request.clone();
         if query.signature_type.is_none() {
             query.signature_type = Some(self.signature_type());
@@ -1107,6 +1133,7 @@ impl<K: Kind> Client<Authenticated<K>> {
 
         Ok(SignedOrder {
             order: signable_order.order,
+            expiration: signable_order.expiration,
             signature,
             owner: self.credentials().key(),
             order_type: signable_order.order_type,
@@ -1178,28 +1205,31 @@ impl<K: Kind> Client<Authenticated<K>> {
         post_only: bool,
         defer_exec: bool,
     ) -> Result<OrderResponse> {
-        let mut builder = self
-            .limit_order()
-            .token_id(user_order.token_id)
-            .price(user_order.price)
-            .size(user_order.size)
-            .side(user_order.side)
-            .order_type(order_type)
-            .post_only(post_only)
-            .defer_exec(defer_exec);
+        self.retry_order_submission(|| async {
+            let mut builder = self
+                .limit_order()
+                .token_id(user_order.token_id)
+                .price(user_order.price)
+                .size(user_order.size)
+                .side(user_order.side)
+                .order_type(order_type)
+                .post_only(post_only)
+                .defer_exec(defer_exec);
 
-        if let Some(metadata) = user_order.metadata {
-            builder = builder.metadata(metadata);
-        }
-        if let Some(builder_code) = user_order.builder_code {
-            builder = builder.builder_code(builder_code);
-        }
-        if let Some(expiration) = user_order.expiration {
-            builder = builder.expiration(expiration);
-        }
+            if let Some(metadata) = user_order.metadata {
+                builder = builder.metadata(metadata);
+            }
+            if let Some(builder_code) = user_order.builder_code {
+                builder = builder.builder_code(builder_code);
+            }
+            if let Some(expiration) = user_order.expiration {
+                builder = builder.expiration(expiration);
+            }
 
-        let order = self.sign(signer, builder.build().await?).await?;
-        self.post_order(&order).await
+            let order = self.sign(signer, builder.build().await?).await?;
+            self.post_order_value(&order).await
+        })
+        .await
     }
 
     pub async fn create_and_post_market_order<S: Signer>(
@@ -1209,32 +1239,39 @@ impl<K: Kind> Client<Authenticated<K>> {
         order_type: OrderType,
         defer_exec: bool,
     ) -> Result<OrderResponse> {
-        let mut builder = self
-            .market_order()
-            .token_id(user_order.token_id)
-            .amount(user_order.amount)
-            .side(user_order.side)
-            .order_type(order_type)
-            .defer_exec(defer_exec);
+        self.retry_order_submission(|| async {
+            let mut builder = self
+                .market_order()
+                .token_id(user_order.token_id)
+                .amount(user_order.amount)
+                .side(user_order.side)
+                .order_type(order_type)
+                .defer_exec(defer_exec);
 
-        if let Some(price) = user_order.price {
-            builder = builder.price(price);
-        }
-        if let Some(metadata) = user_order.metadata {
-            builder = builder.metadata(metadata);
-        }
-        if let Some(builder_code) = user_order.builder_code {
-            builder = builder.builder_code(builder_code);
-        }
-        if let Some(user_usdc_balance) = user_order.user_usdc_balance {
-            builder = builder.user_usdc_balance(user_usdc_balance);
-        }
+            if let Some(price) = user_order.price {
+                builder = builder.price(price);
+            }
+            if let Some(metadata) = user_order.metadata {
+                builder = builder.metadata(metadata);
+            }
+            if let Some(builder_code) = user_order.builder_code {
+                builder = builder.builder_code(builder_code);
+            }
+            if let Some(user_usdc_balance) = user_order.user_usdc_balance {
+                builder = builder.user_usdc_balance(user_usdc_balance);
+            }
 
-        let order = self.sign(signer, builder.build().await?).await?;
-        self.post_order(&order).await
+            let order = self.sign(signer, builder.build().await?).await?;
+            self.post_order_value(&order).await
+        })
+        .await
     }
 
     pub async fn post_order(&self, order: &SignedOrder) -> Result<OrderResponse> {
+        self.auth_post("/order", &build_post_order_payload(order)?).await
+    }
+
+    async fn post_order_value(&self, order: &SignedOrder) -> Result<Value> {
         self.auth_post("/order", &build_post_order_payload(order)?).await
     }
 
@@ -1282,6 +1319,35 @@ impl<K: Kind> Client<Authenticated<K>> {
 
     pub async fn create_builder_api_key(&self) -> Result<BuilderApiKey> {
         self.auth_post("/auth/builder-api-key", &()).await
+    }
+
+    pub async fn builder_fees(
+        &self,
+        builder_code: &str,
+    ) -> Result<crate::clob::types::BuilderFeesResponse> {
+        if let Some(rate) = self.inner.builder_fee_rates.get(builder_code) {
+            return Ok(crate::clob::types::BuilderFeesResponse {
+                builder_maker_fee_rate_bps: builder_fee_rate_to_bps(rate.maker),
+                builder_taker_fee_rate_bps: builder_fee_rate_to_bps(rate.taker),
+            });
+        }
+
+        let response: crate::clob::types::BuilderFeesResponse = self
+            .get(
+                &format!("/fees/builder-fees/{builder_code}"),
+                Option::<&()>::None,
+            )
+            .await?;
+
+        self.inner.builder_fee_rates.insert(
+            builder_code.to_owned(),
+            BuilderFeeRate {
+                maker: f64::from(response.builder_maker_fee_rate_bps) / 10_000.0,
+                taker: f64::from(response.builder_taker_fee_rate_bps) / 10_000.0,
+            },
+        );
+
+        Ok(response)
     }
 
     pub async fn builder_api_keys(&self) -> Result<Vec<BuilderApiKeyResponse>> {
@@ -1470,6 +1536,27 @@ impl<K: Kind> Client<Authenticated<K>> {
         })
         .await
     }
+
+    async fn retry_order_submission<F, Fut>(&self, mut submit: F) -> Result<OrderResponse>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<Value>>,
+    {
+        let response = submit().await?;
+        if is_order_version_mismatch(&response) {
+            self.invalidate_cached_version();
+            let _ = self.version().await?;
+            return deserialize_order_response(submit().await?);
+        }
+
+        deserialize_order_response(response)
+    }
+
+    fn invalidate_cached_version(&self) {
+        self.inner
+            .cached_version
+            .store(UNSET_VERSION, Ordering::Relaxed);
+    }
 }
 
 #[derive(Serialize)]
@@ -1530,7 +1617,7 @@ fn build_post_order_payload(order: &SignedOrder) -> Result<PostOrderPayload> {
             timestamp: order.order.timestamp.to_string(),
             metadata: order.order.metadata.to_string(),
             builder: order.order.builder.to_string(),
-            expiration: order.order.expiration.to_string(),
+            expiration: order.expiration.to_string(),
             signature: order.signature.to_string(),
         },
         owner: order.owner.to_string(),
@@ -1538,4 +1625,124 @@ fn build_post_order_payload(order: &SignedOrder) -> Result<PostOrderPayload> {
         defer_exec: order.defer_exec,
         post_only: order.post_only,
     })
+}
+
+fn is_order_version_mismatch(value: &Value) -> bool {
+    value.get("error").is_some_and(|error| match error {
+        Value::String(message) => message.contains(ORDER_VERSION_MISMATCH_ERROR),
+        other => other.to_string().contains(ORDER_VERSION_MISMATCH_ERROR),
+    })
+}
+
+fn deserialize_order_response(value: Value) -> Result<OrderResponse> {
+    if is_order_version_mismatch(&value) {
+        let message = value
+            .get("error")
+            .map_or_else(|| ORDER_VERSION_MISMATCH_ERROR.to_owned(), Value::to_string);
+        return Err(Error::validation(message));
+    }
+
+    crate::serde_helpers::deserialize_with_warnings(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use alloy::signers::Signer as _;
+    use httpmock::Method::GET;
+    use httpmock::MockServer;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::auth::{Credentials, PrivateKeySigner};
+
+    fn signer() -> PrivateKeySigner {
+        PrivateKeySigner::from_str(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .expect("valid private key")
+        .with_chain_id(Some(crate::POLYGON))
+    }
+
+    async fn authenticated_client(server: &MockServer) -> Client<Authenticated<Normal>> {
+        Client::new(
+            &server.base_url(),
+            Config::builder().allow_insecure(true).build(),
+        )
+            .expect("client")
+            .authentication_builder(&signer())
+            .credentials(Credentials::new(
+                Uuid::nil(),
+                "c2VjcmV0".to_owned(),
+                "passphrase".to_owned(),
+            ))
+            .authenticate()
+            .await
+            .expect("authenticated client")
+    }
+
+    #[tokio::test]
+    async fn collect_pages_errors_when_cursor_never_terminates() {
+        let client = Client::new("https://clob.polymarket.com", Config::default())
+            .expect("client");
+
+        let error = client
+            .collect_pages(|_| async {
+                Ok(Page {
+                    limit: 1,
+                    count: 1,
+                    next_cursor: "MA==".to_owned(),
+                    data: vec![1_u32],
+                })
+            })
+            .await
+            .expect_err("pagination should fail");
+
+        assert_eq!(error.kind(), ErrorKind::Validation);
+        assert!(error.to_string().contains("pagination exceeded maximum page limit"));
+    }
+
+    #[tokio::test]
+    async fn retry_order_submission_retries_once_after_version_mismatch() {
+        let server = MockServer::start();
+        let version = server.mock(|when, then| {
+            when.method(GET).path("/version");
+            then.status(200)
+                .json_body_obj(&serde_json::json!({ "version": 2 }));
+        });
+        let client = authenticated_client(&server).await;
+
+        assert_eq!(client.version().await.expect("version"), 2);
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let response = client
+            .retry_order_submission(|| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        Ok(serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR }))
+                    } else {
+                        Ok(serde_json::json!({
+                            "success": true,
+                            "error_msg": null,
+                            "order_id": "retry-ok",
+                            "transactions_hashes": [],
+                            "status": "live",
+                            "taking_amount": "100",
+                            "making_amount": "50"
+                        }))
+                    }
+                }
+            })
+            .await
+            .expect("order response");
+
+        assert_eq!(response.order_id, "retry-ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        version.assert_calls(2);
+    }
 }

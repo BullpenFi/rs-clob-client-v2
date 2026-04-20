@@ -32,7 +32,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub const POLYGON: ChainId = 137;
 pub const AMOY: ChainId = 80002;
-pub const PRIVATE_KEY_VAR: &str = "POLYMARKET_PRIVATE_KEY";
 
 pub(crate) type Timestamp = i64;
 

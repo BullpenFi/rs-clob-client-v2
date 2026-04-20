@@ -11,7 +11,7 @@ use serde::Deserialize;
 use sha2::Sha256;
 pub use uuid::Uuid;
 
-use crate::{Result, Timestamp};
+use crate::{Error, Result, Timestamp};
 
 pub type ApiKey = Uuid;
 
@@ -225,7 +225,7 @@ pub mod l2 {
         request: &Request,
         timestamp: Timestamp,
     ) -> Result<HeaderMap> {
-        let signature = hmac(&state.credentials.secret, &to_message(request, timestamp))?;
+        let signature = hmac(&state.credentials.secret, &to_message(request, timestamp)?)?;
 
         let mut map = HeaderMap::new();
         map.insert(POLY_ADDRESS, state.address.to_string().parse()?);
@@ -243,9 +243,11 @@ pub mod l2 {
 }
 
 pub mod builder {
+    use std::fmt;
+
     use reqwest::header::HeaderMap;
     use reqwest::{Client, Request};
-    use secrecy::ExposeSecret as _;
+    use secrecy::{ExposeSecret as _, SecretString};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     pub use url::Url;
@@ -271,10 +273,13 @@ pub mod builder {
     }
 
     #[non_exhaustive]
-    #[derive(Clone, Debug)]
+    #[derive(Clone)]
     pub enum Config {
         Local(Credentials),
-        Remote { host: Url, token: Option<String> },
+        Remote {
+            host: Url,
+            token: Option<SecretString>,
+        },
     }
 
     impl Config {
@@ -286,8 +291,21 @@ pub mod builder {
         pub fn remote(host: &str, token: Option<String>) -> Result<Self> {
             Ok(Self::Remote {
                 host: Url::parse(host)?,
-                token,
+                token: token.map(SecretString::from),
             })
+        }
+    }
+
+    impl fmt::Debug for Config {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Local(_) => f.debug_tuple("Local").field(&"[REDACTED]").finish(),
+                Self::Remote { host, token } => f
+                    .debug_struct("Remote")
+                    .field("host", host)
+                    .field("token", &token.as_ref().map(|_| "[REDACTED]"))
+                    .finish(),
+            }
         }
     }
 
@@ -314,7 +332,7 @@ pub mod builder {
         ) -> Result<HeaderMap> {
             match &self.config {
                 Config::Local(credentials) => {
-                    let signature = hmac(&credentials.secret, &to_message(request, timestamp))?;
+                    let signature = hmac(&credentials.secret, &to_message(request, timestamp)?)?;
 
                     let mut map = HeaderMap::new();
                     map.insert(POLY_BUILDER_API_KEY, credentials.key.to_string().parse()?);
@@ -330,13 +348,20 @@ pub mod builder {
                     let payload = json!({
                         "method": request.method().as_str(),
                         "path": request.url().path(),
-                        "body": request.body().and_then(body_to_string).unwrap_or_default(),
+                        "body": request
+                            .body()
+                            .map(body_to_string)
+                            .transpose()?
+                            .unwrap_or_default(),
                         "timestamp": timestamp,
                     });
 
                     let mut headers = HeaderMap::new();
                     if let Some(token) = token {
-                        headers.insert("Authorization", format!("Bearer {token}").parse()?);
+                        headers.insert(
+                            "Authorization",
+                            format!("Bearer {}", token.expose_secret()).parse()?,
+                        );
                     }
 
                     let response = self
@@ -361,17 +386,26 @@ pub mod builder {
     }
 }
 
-#[must_use]
-fn to_message(request: &Request, timestamp: Timestamp) -> String {
-    let body = request.body().and_then(body_to_string).unwrap_or_default();
-    format!("{timestamp}{}{path}{body}", request.method(), path = request.url().path())
+fn to_message(request: &Request, timestamp: Timestamp) -> Result<String> {
+    let body = request
+        .body()
+        .map(body_to_string)
+        .transpose()?
+        .unwrap_or_default();
+    Ok(format!(
+        "{timestamp}{}{path}{body}",
+        request.method(),
+        path = request.url().path()
+    ))
 }
 
-#[must_use]
-fn body_to_string(body: &Body) -> Option<String> {
-    body.as_bytes()
-        .map(String::from_utf8_lossy)
-        .map(|value| value.replace('\'', "\""))
+fn body_to_string(body: &Body) -> Result<String> {
+    let bytes = body
+        .as_bytes()
+        .ok_or_else(|| Error::validation("request body is not available for HMAC signing"))?;
+    let body = std::str::from_utf8(bytes)
+        .map_err(|_| Error::validation("request body is not valid UTF-8 for HMAC signing"))?;
+    Ok(body.replace('\'', "\""))
 }
 
 fn hmac(secret: &SecretString, message: &str) -> Result<String> {

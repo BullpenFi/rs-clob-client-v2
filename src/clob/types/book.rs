@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+// SHA-1 is used here for API compatibility with Polymarket's orderbook hash,
+// not for cryptographic security. Do not replace with SHA-256.
 use sha1::{Digest as _, Sha1};
 
 use crate::clob::types::{Side, TickSize};

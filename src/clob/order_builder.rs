@@ -223,8 +223,8 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
                 current_timestamp_millis()?,
                 self.metadata.unwrap_or(B256::ZERO),
                 self.builder_code.unwrap_or(B256::ZERO),
-                expiration,
             ),
+            expiration,
             order_type,
             post_only,
             defer_exec,
@@ -284,7 +284,35 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         validate_price(price)?;
         let round_config = tick_size.round_config();
-        let (maker_amount, taker_amount) = get_market_raw_amounts(side, amount, price, round_config);
+        let amount = if side == Side::Buy {
+            match self.user_usdc_balance {
+                Some(user_usdc_balance) => {
+                    let builder_taker_fee_rate = match self.builder_code {
+                        Some(builder_code) if builder_code != B256::ZERO => {
+                            let fee_response = self.client.builder_fees(&builder_code.to_string()).await?;
+                            Decimal::from(fee_response.builder_taker_fee_rate_bps)
+                                / Decimal::from(10_000_u32)
+                        }
+                        _ => Decimal::ZERO,
+                    };
+
+                    let fee_info = self.client.platform_fee_info(token_id).await?;
+                    adjust_buy_amount_for_fees(
+                        amount,
+                        price,
+                        user_usdc_balance,
+                        fee_info.rate,
+                        fee_info.exponent,
+                        builder_taker_fee_rate,
+                    )
+                }
+                None => amount,
+            }
+        } else {
+            amount
+        };
+        let (maker_amount, taker_amount) =
+            get_market_raw_amounts(side, amount, price, round_config)?;
 
         Ok(SignableOrder {
             order: new_order(
@@ -299,8 +327,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
                 current_timestamp_millis()?,
                 self.metadata.unwrap_or(B256::ZERO),
                 self.builder_code.unwrap_or(B256::ZERO),
-                0,
             ),
+            expiration: 0,
             order_type,
             post_only,
             defer_exec,
@@ -328,7 +356,9 @@ fn validate_size(size: Decimal) -> Result<()> {
 }
 
 fn generate_salt() -> U256 {
-    U256::from(random::<u64>())
+    // Polymarket's backend parses salts as IEEE 754 doubles, so values must stay
+    // within JavaScript's max safe integer range to preserve the signed payload.
+    U256::from(random::<u64>() & ((1_u64 << 53) - 1))
 }
 
 fn current_timestamp_millis() -> Result<u64> {
@@ -403,8 +433,13 @@ fn get_market_raw_amounts(
     amount: Decimal,
     price: Decimal,
     round_config: crate::clob::types::RoundConfig,
-) -> (Decimal, Decimal) {
+) -> Result<(Decimal, Decimal)> {
     let raw_price = round_down(price, round_config.price);
+    if raw_price.is_zero() {
+        return Err(Error::validation(
+            "price rounds to zero; cannot calculate market order amounts",
+        ));
+    }
 
     match side {
         Side::Buy => {
@@ -416,7 +451,7 @@ fn get_market_raw_amounts(
                     share_amount = round_down(share_amount, round_config.amount);
                 }
             }
-            (quote_amount, share_amount)
+            Ok((quote_amount, share_amount))
         }
         Side::Sell => {
             let share_amount = round_down(amount, round_config.size);
@@ -427,8 +462,33 @@ fn get_market_raw_amounts(
                     quote_amount = round_down(quote_amount, round_config.amount);
                 }
             }
-            (share_amount, quote_amount)
+            Ok((share_amount, quote_amount))
         }
+    }
+}
+
+fn adjust_buy_amount_for_fees(
+    amount: Decimal,
+    price: Decimal,
+    user_usdc_balance: Decimal,
+    fee_rate: Decimal,
+    fee_exponent: u32,
+    builder_taker_fee_rate: Decimal,
+) -> Decimal {
+    let price_term = price * (Decimal::ONE - price);
+    let mut price_term_power = Decimal::ONE;
+    for _ in 0..fee_exponent {
+        price_term_power *= price_term;
+    }
+
+    let platform_fee_rate = fee_rate * price_term_power;
+    let platform_fee = (amount / price) * platform_fee_rate;
+    let total_cost = amount + platform_fee + amount * builder_taker_fee_rate;
+
+    if user_usdc_balance <= total_cost {
+        user_usdc_balance / (Decimal::ONE + (platform_fee_rate / price) + builder_taker_fee_rate)
+    } else {
+        amount
     }
 }
 
@@ -436,4 +496,32 @@ fn to_scaled_u256(value: Decimal, scale: u32) -> Result<U256> {
     let factor = Decimal::from(10_u64.pow(scale));
     let scaled = round_down(value * factor, 0).normalize();
     U256::from_str(&scaled.to_string()).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_salts_stay_within_javascript_safe_integer_range() {
+        let max_safe_integer = U256::from((1_u64 << 53) - 1);
+
+        for _ in 0..1000 {
+            assert!(generate_salt() <= max_safe_integer);
+        }
+    }
+
+    #[test]
+    fn buy_amount_is_adjusted_for_builder_fees_when_balance_is_tight() {
+        let adjusted = adjust_buy_amount_for_fees(
+            Decimal::from(100_u32),
+            Decimal::new(5, 1),
+            Decimal::from(100_u32),
+            Decimal::ZERO,
+            0,
+            Decimal::new(2, 2),
+        );
+
+        assert_eq!(round_down(adjusted, 2), Decimal::new(9803, 2));
+    }
 }

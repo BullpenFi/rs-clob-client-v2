@@ -3,6 +3,7 @@ use std::str::FromStr as _;
 use alloy::primitives::{B256, U256, address};
 use alloy::signers::Signer as _;
 use polymarket_clob_client_v2::auth::state::Authenticated;
+use polymarket_clob_client_v2::auth::builder;
 use polymarket_clob_client_v2::auth::{Credentials, Normal, PrivateKeySigner, l1, l2};
 use polymarket_clob_client_v2::clob::types::{OrderType, Side, SignatureTypeV2, sign_order, signing_hash};
 use polymarket_clob_client_v2::clob::types::{Order, new_order};
@@ -31,7 +32,6 @@ fn sample_order() -> Order {
         1_700_000_000_000,
         B256::ZERO,
         B256::ZERO,
-        0,
     )
 }
 
@@ -113,8 +113,19 @@ async fn order_signing_round_trip_recovers_signer() {
 fn signable_order_type_is_constructible() {
     let _ = polymarket_clob_client_v2::clob::types::SignableOrder {
         order: sample_order(),
+        expiration: 0,
         order_type: OrderType::Gtc,
         post_only: false,
         defer_exec: false,
     };
+}
+
+#[test]
+fn remote_builder_config_debug_redacts_bearer_token() {
+    let config = builder::Config::remote("https://example.com/sign", Some("super-secret-token".to_owned()))
+        .expect("remote builder config");
+
+    let debug = format!("{config:?}");
+    assert!(debug.contains("[REDACTED]"));
+    assert!(!debug.contains("super-secret-token"));
 }

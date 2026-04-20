@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use crate::clob::types::TickSize;
-use crate::serde_helpers::{StringFromAny, deserialize_tick_size};
+use crate::serde_helpers::{StringFromAny, deserialize_optional_decimal, deserialize_tick_size};
 use crate::types::Decimal;
 
 #[non_exhaustive]
@@ -16,10 +16,10 @@ pub struct ClobToken {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct FeeDetails {
-    #[serde(rename = "r")]
-    pub rate: Option<u32>,
+    #[serde(rename = "r", deserialize_with = "deserialize_optional_decimal")]
+    pub rate: Option<Decimal>,
     #[serde(rename = "e")]
     pub exponent: Option<u32>,
     #[serde(rename = "to")]

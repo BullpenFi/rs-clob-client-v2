@@ -3,6 +3,7 @@ use serde::de::{self, DeserializeOwned, Visitor};
 use serde_json::Value;
 
 use crate::clob::types::TickSize;
+use crate::types::Decimal;
 
 pub struct StringFromAny;
 
@@ -84,4 +85,30 @@ where
     };
 
     raw.parse().map_err(serde::de::Error::custom)
+}
+
+pub fn deserialize_optional_decimal<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Decimal>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let raw = match value {
+        Value::String(value) => value,
+        Value::Number(value) => value.to_string(),
+        other => {
+            return Err(serde::de::Error::custom(format!(
+                "expected decimal as string or number, got {other}"
+            )))
+        }
+    };
+
+    raw.parse::<Decimal>()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }

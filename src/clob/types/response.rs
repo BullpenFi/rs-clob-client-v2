@@ -68,9 +68,9 @@ pub struct FeeRateResponse {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct FeeInfo {
-    pub rate: u32,
+    pub rate: Decimal,
     pub exponent: u32,
 }
 

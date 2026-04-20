@@ -27,13 +27,15 @@ sol! {
         uint256 timestamp;
         bytes32 metadata;
         bytes32 builder;
-        uint256 expiration;
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignableOrder {
     pub order: Order,
+    // Polymarket V2 sends expiration in the POST payload, but it is not part of the
+    // typed-data struct or on-chain V2 Order tuple and must not affect the signing hash.
+    pub expiration: u64,
     pub order_type: OrderType,
     pub post_only: bool,
     pub defer_exec: bool,
@@ -42,6 +44,7 @@ pub struct SignableOrder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedOrder {
     pub order: Order,
+    pub expiration: u64,
     pub signature: Signature,
     pub owner: ApiKey,
     pub order_type: OrderType,
@@ -89,7 +92,6 @@ pub fn new_order(
     timestamp_ms: u64,
     metadata: B256,
     builder: B256,
-    expiration: u64,
 ) -> Order {
     Order {
         salt,
@@ -103,6 +105,38 @@ pub fn new_order(
         timestamp: U256::from(timestamp_ms),
         metadata,
         builder,
-        expiration: U256::from(expiration),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::{B256, U256, address, keccak256};
+
+    use super::*;
+    use crate::clob::types::Side;
+
+    fn sample_order() -> Order {
+        new_order(
+            U256::from(1_u64),
+            address!("0x0000000000000000000000000000000000000001"),
+            address!("0x0000000000000000000000000000000000000002"),
+            U256::from(123_u64),
+            U256::from(1_000_000_u64),
+            U256::from(2_000_000_u64),
+            Side::Buy,
+            SignatureTypeV2::Eoa,
+            1_700_000_000_000,
+            B256::ZERO,
+            B256::ZERO,
+        )
+    }
+
+    #[test]
+    fn order_type_hash_matches_ts_v2_typed_data() {
+        let expected = keccak256(
+            "Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)",
+        );
+
+        assert_eq!(sample_order().eip712_type_hash(), expected);
     }
 }
