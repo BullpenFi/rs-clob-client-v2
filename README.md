@@ -29,14 +29,16 @@ The package name intentionally matches Polymarket's official Rust SDK so downstr
 
 ## Getting started
 
-Use this repository as a git dependency:
+Use this repository as a pinned git dependency:
 
 ```toml
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", branch = "main" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
 ```
 
 Do not depend on this crate from crates.io. This repository intentionally keeps `publish = false` even though it uses the official package/import name.
+
+For full downstream integration guidance, see [docs/integration-guide.md](docs/integration-guide.md).
 
 ## Intended migration path
 
@@ -51,7 +53,7 @@ When Polymarket releases an official Rust V2 SDK, the intended migration should 
 ```toml
 # Current testing setup
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", branch = "main" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
 
 # Intended future setup once Polymarket ships an official Rust V2 SDK
 [dependencies]
@@ -112,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let order = UserOrder::builder()
-        .token_id(U256::from(1_u64))
+        .token_id(U256::from_str("<token-id>")?)
         .price(Decimal::from_str("0.55")?)
         .size(Decimal::from_str("10.00")?)
         .side(Side::Buy)
@@ -130,6 +132,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - Default: REST client and V2 order builder
 - `ws`: generic WebSocket transport and CLOB subscription scaffolding
+
+## Example environment
+
+Public read examples:
+- `POLYMARKET_CLOB_HOST` optional, defaults to `https://clob.polymarket.com`
+- `POLYMARKET_TOKEN_ID` required for `market_data`
+
+Authenticated examples:
+- `POLYMARKET_PRIVATE_KEY` required
+- `POLYMARKET_TOKEN_ID` required
+- `POLYMARKET_CLOB_HOST` optional
 
 ## Toolchain
 
