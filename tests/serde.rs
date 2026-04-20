@@ -1,11 +1,11 @@
 use std::str::FromStr as _;
 
-use polymarket_clob_client_v2::clob::types::{
+use polymarket_client_sdk::clob::types::{
     BuilderTradesResponse, FeeInfo, MarketDetails, MarketPrice, MarketReward, OpenOrder,
-    OrderBookSummary, OrderType, Page, RewardsPercentages, Side, SignatureTypeV2, TickSize,
-    Token, Trade, TradesPaginatedResponse, UserRewardsEarning,
+    OrderBookSummary, OrderType, Page, RewardsPercentages, Side, SignatureTypeV2, TickSize, Token,
+    Trade, TradesPaginatedResponse, UserRewardsEarning,
 };
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::types::Decimal;
 use serde_json::Value;
 
 fn dec(value: &str) -> Decimal {

@@ -182,9 +182,10 @@ mod tests {
             .build()
             .expect("request");
 
-        let response: OkResponse = send_request(&client, built_request, Some(auth_headers()), false)
-            .await
-            .expect("response");
+        let response: OkResponse =
+            send_request(&client, built_request, Some(auth_headers()), false)
+                .await
+                .expect("response");
 
         mock.assert();
         assert!(response.ok);

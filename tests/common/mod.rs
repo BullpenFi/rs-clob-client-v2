@@ -1,8 +1,8 @@
 use std::str::FromStr as _;
 
-use polymarket_clob_client_v2::POLYGON;
-use polymarket_clob_client_v2::auth::{Credentials, Normal, PrivateKeySigner, Signer as _};
-use polymarket_clob_client_v2::clob::{Client, Config};
+use polymarket_client_sdk::POLYGON;
+use polymarket_client_sdk::auth::{Credentials, Normal, PrivateKeySigner, Signer as _};
+use polymarket_client_sdk::clob::{Client, Config};
 use uuid::Uuid;
 
 pub const PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -25,7 +25,7 @@ pub fn credentials() -> Credentials {
 pub async fn create_authenticated(
     host: &str,
     config: Config,
-) -> Client<polymarket_clob_client_v2::auth::state::Authenticated<Normal>> {
+) -> Client<polymarket_client_sdk::auth::state::Authenticated<Normal>> {
     Client::new(host, config)
         .expect("client")
         .authentication_builder(&signer())

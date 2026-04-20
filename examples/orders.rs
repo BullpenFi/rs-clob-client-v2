@@ -7,11 +7,11 @@ use std::str::FromStr as _;
 
 use alloy::primitives::U256;
 use alloy::signers::Signer as _;
-use polymarket_clob_client_v2::POLYGON;
-use polymarket_clob_client_v2::auth::PrivateKeySigner;
-use polymarket_clob_client_v2::clob::types::{OrderType, Side};
-use polymarket_clob_client_v2::clob::{Client, Config, UserOrder};
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::POLYGON;
+use polymarket_client_sdk::auth::PrivateKeySigner;
+use polymarket_client_sdk::clob::types::{OrderType, Side};
+use polymarket_client_sdk::clob::{Client, Config, UserOrder};
+use polymarket_client_sdk::types::Decimal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -3,7 +3,7 @@
     reason = "Examples intentionally print user-visible output"
 )]
 
-use polymarket_clob_client_v2::clob::{Client, Config};
+use polymarket_client_sdk::clob::{Client, Config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

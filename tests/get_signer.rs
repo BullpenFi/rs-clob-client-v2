@@ -4,12 +4,12 @@ use std::str::FromStr as _;
 
 use alloy::primitives::U256;
 use alloy::signers::Signer as _;
-use polymarket_clob_client_v2::auth::PrivateKeySigner;
-use polymarket_clob_client_v2::clob::types::Side;
-use polymarket_clob_client_v2::clob::{Config, UserMarketOrder, UserOrder};
-use polymarket_clob_client_v2::config::exchange_contract;
-use polymarket_clob_client_v2::types::Decimal;
-use polymarket_clob_client_v2::{Error, POLYGON};
+use polymarket_client_sdk::auth::PrivateKeySigner;
+use polymarket_client_sdk::clob::types::Side;
+use polymarket_client_sdk::clob::{Config, UserMarketOrder, UserOrder};
+use polymarket_client_sdk::config::exchange_contract;
+use polymarket_client_sdk::types::Decimal;
+use polymarket_client_sdk::{Error, POLYGON};
 
 fn alternate_signer() -> PrivateKeySigner {
     PrivateKeySigner::from_str("0x8b3a350cf5c34c9194ca3a545d4df2f3b0c5adce3b067a729b9f3cf0f4a8e15d")
@@ -19,13 +19,13 @@ fn alternate_signer() -> PrivateKeySigner {
 
 async fn configured_client(
     config: Config,
-) -> polymarket_clob_client_v2::clob::Client<
-    polymarket_clob_client_v2::auth::state::Authenticated<polymarket_clob_client_v2::auth::Normal>,
+) -> polymarket_client_sdk::clob::Client<
+    polymarket_client_sdk::auth::state::Authenticated<polymarket_client_sdk::auth::Normal>,
 > {
     let client = common::create_authenticated(common::TEST_HOST, config).await;
     client.set_tick_size(
         U256::from(1_u64),
-        polymarket_clob_client_v2::clob::types::TickSize::Hundredth,
+        polymarket_client_sdk::clob::types::TickSize::Hundredth,
     );
     client.set_neg_risk(U256::from(1_u64), false);
     client
@@ -60,7 +60,7 @@ async fn static_signer_fallback_signs_orders_without_factory() {
         .expect("signed order");
 
     let verifying_contract = exchange_contract(POLYGON, false).expect("exchange contract");
-    let hash = polymarket_clob_client_v2::clob::types::signing_hash(
+    let hash = polymarket_client_sdk::clob::types::signing_hash(
         &signed.order,
         POLYGON,
         verifying_contract,
@@ -95,7 +95,7 @@ async fn order_builder_get_signer_uses_factory_signer_for_build_and_sign() {
                 async move {
                     Ok(Box::new(dynamic_signer)
                         as Box<
-                            dyn polymarket_clob_client_v2::auth::Signer + Send + Sync,
+                            dyn polymarket_client_sdk::auth::Signer + Send + Sync,
                         >)
                 }
             }
@@ -107,7 +107,7 @@ async fn order_builder_get_signer_uses_factory_signer_for_build_and_sign() {
         .await
         .expect("signed order");
     let verifying_contract = exchange_contract(POLYGON, false).expect("exchange contract");
-    let hash = polymarket_clob_client_v2::clob::types::signing_hash(
+    let hash = polymarket_client_sdk::clob::types::signing_hash(
         &signed.order,
         POLYGON,
         verifying_contract,
@@ -144,7 +144,7 @@ async fn market_order_builder_get_signer_uses_factory_signer_for_build_and_sign(
                 async move {
                     Ok(Box::new(dynamic_signer)
                         as Box<
-                            dyn polymarket_clob_client_v2::auth::Signer + Send + Sync,
+                            dyn polymarket_client_sdk::auth::Signer + Send + Sync,
                         >)
                 }
             }
@@ -156,7 +156,7 @@ async fn market_order_builder_get_signer_uses_factory_signer_for_build_and_sign(
         .await
         .expect("signed order");
     let verifying_contract = exchange_contract(POLYGON, false).expect("exchange contract");
-    let hash = polymarket_clob_client_v2::clob::types::signing_hash(
+    let hash = polymarket_client_sdk::clob::types::signing_hash(
         &signed.order,
         POLYGON,
         verifying_contract,
@@ -185,7 +185,7 @@ async fn config_get_signer_takes_precedence_over_static_signer() {
             async move {
                 Ok(Box::new(dynamic_signer)
                     as Box<
-                        dyn polymarket_clob_client_v2::auth::Signer + Send + Sync,
+                        dyn polymarket_client_sdk::auth::Signer + Send + Sync,
                     >)
             }
         }
@@ -197,7 +197,7 @@ async fn config_get_signer_takes_precedence_over_static_signer() {
         .await
         .expect("signed order");
     let verifying_contract = exchange_contract(POLYGON, false).expect("exchange contract");
-    let hash = polymarket_clob_client_v2::clob::types::signing_hash(
+    let hash = polymarket_client_sdk::clob::types::signing_hash(
         &signed.order,
         POLYGON,
         verifying_contract,
@@ -240,7 +240,7 @@ async fn config_get_signer_market_order_uses_dynamic_signer_as_maker_and_signer(
             async move {
                 Ok(Box::new(dynamic_signer)
                     as Box<
-                        dyn polymarket_clob_client_v2::auth::Signer + Send + Sync,
+                        dyn polymarket_client_sdk::auth::Signer + Send + Sync,
                     >)
             }
         }
@@ -252,7 +252,7 @@ async fn config_get_signer_market_order_uses_dynamic_signer_as_maker_and_signer(
         .await
         .expect("signed market order");
     let verifying_contract = exchange_contract(POLYGON, false).expect("exchange contract");
-    let hash = polymarket_clob_client_v2::clob::types::signing_hash(
+    let hash = polymarket_client_sdk::clob::types::signing_hash(
         &signed.order,
         POLYGON,
         verifying_contract,

@@ -5,9 +5,9 @@ use std::str::FromStr as _;
 use alloy::primitives::U256;
 use httpmock::Method::GET;
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::types::{BuilderConfig, FeeInfo, OrderType, Side, TickSize};
-use polymarket_clob_client_v2::clob::{Config, UserMarketOrder};
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::clob::types::{BuilderConfig, FeeInfo, OrderType, Side, TickSize};
+use polymarket_client_sdk::clob::{Config, UserMarketOrder};
+use polymarket_client_sdk::types::Decimal;
 
 #[tokio::test]
 async fn limit_order_builder_matches_v2_amount_rules() {

@@ -4,8 +4,8 @@
 )]
 
 use alloy::primitives::U256;
-use polymarket_clob_client_v2::clob::types::Side;
-use polymarket_clob_client_v2::clob::{Client, Config};
+use polymarket_client_sdk::clob::types::Side;
+use polymarket_client_sdk::clob::{Client, Config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

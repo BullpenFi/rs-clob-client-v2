@@ -5,9 +5,9 @@ use std::str::FromStr as _;
 use alloy::primitives::U256;
 use httpmock::Method::GET;
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::types::{OrderType, Side};
-use polymarket_clob_client_v2::clob::{Client, Config};
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::clob::types::{OrderType, Side};
+use polymarket_client_sdk::clob::{Client, Config};
+use polymarket_client_sdk::types::Decimal;
 
 fn dec(value: &str) -> Decimal {
     Decimal::from_str(value).expect("decimal")
@@ -28,7 +28,7 @@ async fn calculate_market_price(
     order_type: OrderType,
     bids: Vec<serde_json::Value>,
     asks: Vec<serde_json::Value>,
-) -> polymarket_clob_client_v2::Result<Decimal> {
+) -> polymarket_client_sdk::Result<Decimal> {
     let server = MockServer::start();
     let token_id_string = token_id.to_string();
     let mock = server.mock(|when, then| {

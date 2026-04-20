@@ -276,10 +276,7 @@ mod tests {
     #[cfg(feature = "tracing")]
     impl RecordingSubscriber {
         fn joined(&self) -> String {
-            self.events
-                .lock()
-                .expect("events lock")
-                .join("\n")
+            self.events.lock().expect("events lock").join("\n")
         }
     }
 
@@ -403,7 +400,12 @@ mod tests {
                 "keep": "visible",
                 "passphrase": "hunter2"
             }));
-            assert_eq!(result.expect("payload"), KnownPayload { keep: "visible".to_owned() });
+            assert_eq!(
+                result.expect("payload"),
+                KnownPayload {
+                    keep: "visible".to_owned()
+                }
+            );
         });
 
         let logs = subscriber.joined();

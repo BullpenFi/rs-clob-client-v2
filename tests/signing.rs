@@ -8,12 +8,12 @@ mod common;
 use alloy::primitives::{B256, U256, address, keccak256};
 use alloy::sol;
 use alloy::sol_types::{SolStruct as _, SolValue as _};
-use polymarket_clob_client_v2::clob::types::new_order;
-use polymarket_clob_client_v2::clob::types::{
+use polymarket_client_sdk::clob::types::new_order;
+use polymarket_client_sdk::clob::types::{
     Order, Side, SignatureTypeV2, sign_order, signing_domain, signing_hash,
 };
-use polymarket_clob_client_v2::config::exchange_contract;
-use polymarket_clob_client_v2::{AMOY, POLYGON};
+use polymarket_client_sdk::config::exchange_contract;
+use polymarket_client_sdk::{AMOY, POLYGON};
 
 fn sample_order() -> Order {
     new_order(
@@ -43,7 +43,7 @@ sol! {
 
 fn expected_domain_separator(
     chain_id: u64,
-    verifying_contract: polymarket_clob_client_v2::types::Address,
+    verifying_contract: polymarket_client_sdk::types::Address,
 ) -> B256 {
     let fields = DomainFields {
         typeHash: keccak256(

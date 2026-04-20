@@ -5,13 +5,13 @@ use std::str::FromStr as _;
 use alloy::primitives::{U256, address};
 use httpmock::Method::{DELETE, GET, POST};
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::types::{
+use polymarket_client_sdk::clob::types::{
     AssetType, BalanceAllowanceRequest, OpenOrdersRequest, OrderType, Side, SignatureTypeV2,
     TickSize,
 };
-use polymarket_clob_client_v2::clob::{Client, Config};
-use polymarket_clob_client_v2::error::Status;
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::clob::{Client, Config};
+use polymarket_client_sdk::error::Status;
+use polymarket_client_sdk::types::Decimal;
 use tokio::time::{Duration, sleep};
 
 fn insecure_config() -> Config {
@@ -217,7 +217,10 @@ async fn authentication_promotes_client_without_copying_cache_state() {
 
     client.set_tick_size(token_id, TickSize::Thousandth);
     assert_eq!(
-        authenticated.tick_size(token_id).await.expect("shared cache"),
+        authenticated
+            .tick_size(token_id)
+            .await
+            .expect("shared cache"),
         TickSize::Thousandth
     );
 
@@ -702,7 +705,7 @@ async fn post_order_deserializes_camel_case() {
     let signed = client
         .create_order(
             &signer,
-            polymarket_clob_client_v2::clob::UserOrder::builder()
+            polymarket_client_sdk::clob::UserOrder::builder()
                 .token_id(token_id)
                 .price(dec("0.45"))
                 .size(dec("10"))

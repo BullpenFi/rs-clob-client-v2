@@ -3,9 +3,9 @@ mod common;
 use std::str::FromStr as _;
 
 use alloy::primitives::{B256, U256};
-use polymarket_clob_client_v2::clob::Config;
-use polymarket_clob_client_v2::clob::types::{BuilderConfig, Side, TickSize};
-use polymarket_clob_client_v2::types::Decimal;
+use polymarket_client_sdk::clob::Config;
+use polymarket_client_sdk::clob::types::{BuilderConfig, Side, TickSize};
+use polymarket_client_sdk::types::Decimal;
 
 fn dec(value: &str) -> Decimal {
     Decimal::from_str(value).expect("decimal")
@@ -15,8 +15,8 @@ async fn configured_client(
     token_id: U256,
     tick_size: TickSize,
     config: Config,
-) -> polymarket_clob_client_v2::clob::Client<
-    polymarket_clob_client_v2::auth::state::Authenticated<polymarket_clob_client_v2::auth::Normal>,
+) -> polymarket_client_sdk::clob::Client<
+    polymarket_client_sdk::auth::state::Authenticated<polymarket_client_sdk::auth::Normal>,
 > {
     let client = common::create_authenticated(common::TEST_HOST, config).await;
     client.set_tick_size(token_id, tick_size);
@@ -25,7 +25,7 @@ async fn configured_client(
 }
 
 fn assert_scaled_amounts(
-    signable: &polymarket_clob_client_v2::clob::types::SignableOrder,
+    signable: &polymarket_client_sdk::clob::types::SignableOrder,
     maker_amount: &str,
     taker_amount: &str,
 ) {

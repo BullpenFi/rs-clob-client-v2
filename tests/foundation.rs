@@ -1,7 +1,7 @@
-use polymarket_clob_client_v2::clob::types::{Side, TickSize};
-use polymarket_clob_client_v2::config::contract_config;
-use polymarket_clob_client_v2::error::{Kind, Method, StatusCode};
-use polymarket_clob_client_v2::{AMOY, Error};
+use polymarket_client_sdk::clob::types::{Side, TickSize};
+use polymarket_client_sdk::config::contract_config;
+use polymarket_client_sdk::error::{Kind, Method, StatusCode};
+use polymarket_client_sdk::{AMOY, Error};
 
 #[test]
 fn error_validation_sets_kind() {
@@ -25,7 +25,7 @@ fn amoy_contract_config_matches_reference() {
     let config = contract_config(AMOY).expect("missing amoy config");
     assert_eq!(
         config.exchange_v2,
-        polymarket_clob_client_v2::types::address!("0xE111180000d2663C0091e4f400237545B87B996B")
+        polymarket_client_sdk::types::address!("0xE111180000d2663C0091e4f400237545B87B996B")
     );
 }
 
