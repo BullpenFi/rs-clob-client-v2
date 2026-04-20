@@ -33,7 +33,7 @@ Use this repository as a pinned git dependency:
 
 ```toml
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "d6f030cf8405dff1752592ad9012504f772895d9" }
 ```
 
 Do not depend on this crate from crates.io. This repository intentionally keeps `publish = false` even though it uses the official package/import name.
@@ -53,7 +53,7 @@ When Polymarket releases an official Rust V2 SDK, the intended migration should 
 ```toml
 # Current testing setup
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "d6f030cf8405dff1752592ad9012504f772895d9" }
 
 # Intended future setup once Polymarket ships an official Rust V2 SDK
 [dependencies]

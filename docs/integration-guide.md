@@ -9,7 +9,7 @@ Use a pinned git revision, not `branch = "main"`, in downstream applications.
 
 ```toml
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "d6f030cf8405dff1752592ad9012504f772895d9" }
 ```
 
 Why this shape:
@@ -33,7 +33,7 @@ The intended future cutover is:
 ```toml
 # Current testing setup
 [dependencies]
-polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190" }
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", rev = "d6f030cf8405dff1752592ad9012504f772895d9" }
 
 # Future official setup once Polymarket ships a Rust V2 crate
 [dependencies]
@@ -57,7 +57,7 @@ Example:
 [dependencies]
 polymarket-client-sdk = {
   git = "https://github.com/BullpenFi/rs-clob-client-v2",
-  rev = "fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190",
+  rev = "d6f030cf8405dff1752592ad9012504f772895d9",
   features = ["ws", "tracing"]
 }
 ```
@@ -198,7 +198,7 @@ A live token id can be obtained from Polymarket's public market metadata. One pr
 
 ## Current known-good baseline
 
-- Repository commit used for this integration guidance: `fbe9c45729fd5d883b7fdec3fe2ddbbabbc44190`
+- Repository commit used for this integration guidance: `d6f030cf8405dff1752592ad9012504f772895d9`
 - Local verification at that baseline:
   - `cargo check`
   - `cargo test`
