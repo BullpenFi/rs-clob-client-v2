@@ -1,29 +1,20 @@
-use std::str::FromStr as _;
+mod common;
 
+use alloy::hex::ToHexExt as _;
 use alloy::primitives::{B256, U256, address};
-use alloy::signers::Signer as _;
 use polymarket_clob_client_v2::auth::state::Authenticated;
 use polymarket_clob_client_v2::auth::builder;
-use polymarket_clob_client_v2::auth::{Credentials, Normal, PrivateKeySigner, l1, l2};
-use polymarket_clob_client_v2::clob::types::{OrderType, Side, SignatureTypeV2, sign_order, signing_hash};
+use polymarket_clob_client_v2::auth::{Normal, l1, l2};
+use polymarket_clob_client_v2::clob::types::{Side, SignatureTypeV2, sign_order, signing_hash};
 use polymarket_clob_client_v2::clob::types::{Order, new_order};
 use polymarket_clob_client_v2::{POLYGON, config};
 use reqwest::header::HeaderValue;
-use uuid::Uuid;
-
-fn signer() -> PrivateKeySigner {
-    PrivateKeySigner::from_str(
-        "0x59c6995e998f97a5a0044976f7ad0e51f4f9c2f6f9b8d264bd67bb0a4d8b8d36",
-    )
-    .expect("valid private key")
-    .with_chain_id(Some(POLYGON))
-}
 
 fn sample_order() -> Order {
     new_order(
         U256::from(1_u64),
         address!("0x0000000000000000000000000000000000000001"),
-        signer().address(),
+        common::signer().address(),
         U256::from(123_u64),
         U256::from(1_000_000_u64),
         U256::from(2_000_000_u64),
@@ -37,7 +28,7 @@ fn sample_order() -> Order {
 
 #[tokio::test]
 async fn creates_l1_headers() {
-    let signer = signer();
+    let signer = common::signer();
     let headers = l1::create_headers(&signer, POLYGON, 1_700_000_000, Some(7))
         .await
         .expect("l1 headers");
@@ -52,17 +43,20 @@ async fn creates_l1_headers() {
     );
     assert_eq!(
         headers.get(l1::POLY_ADDRESS),
-        Some(&HeaderValue::from_str(&signer.address().to_string()).expect("header value"))
+        Some(
+            &HeaderValue::from_str(&signer.address().encode_hex_with_prefix())
+                .expect("header value"),
+        )
     );
     assert!(headers.get(l1::POLY_SIGNATURE).is_some());
 }
 
 #[tokio::test]
 async fn creates_l2_headers() {
-    let signer = signer();
+    let signer = common::signer();
     let state = Authenticated::new(
         signer.address(),
-        Credentials::new(Uuid::nil(), "c2VjcmV0".to_owned(), "passphrase".to_owned()),
+        common::credentials(),
         Normal::new(),
     );
 
@@ -87,12 +81,19 @@ async fn creates_l2_headers() {
         headers.get(l2::POLY_TIMESTAMP),
         Some(&HeaderValue::from_static("42"))
     );
+    assert_eq!(
+        headers.get(l2::POLY_ADDRESS),
+        Some(
+            &HeaderValue::from_str(&signer.address().encode_hex_with_prefix())
+                .expect("header value"),
+        )
+    );
     assert!(headers.get(l2::POLY_SIGNATURE).is_some());
 }
 
 #[tokio::test]
 async fn order_signing_round_trip_recovers_signer() {
-    let signer = signer();
+    let signer = common::signer();
     let order = sample_order();
     let verifying_contract =
         config::exchange_contract(POLYGON, false).expect("exchange contract");
@@ -107,17 +108,6 @@ async fn order_signing_round_trip_recovers_signer() {
         signature.recover_address_from_prehash(&hash).expect("recover"),
         signer.address()
     );
-}
-
-#[test]
-fn signable_order_type_is_constructible() {
-    let _ = polymarket_clob_client_v2::clob::types::SignableOrder {
-        order: sample_order(),
-        expiration: 0,
-        order_type: OrderType::Gtc,
-        post_only: false,
-        defer_exec: false,
-    };
 }
 
 #[test]

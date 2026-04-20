@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Builder-prefixed API models intentionally mirror Polymarket's endpoint names"
+)]
+
 use std::fmt;
 
 use bon::Builder;

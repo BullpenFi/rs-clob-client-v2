@@ -1,3 +1,5 @@
+//! Error types for the Polymarket CLOB client.
+
 use std::backtrace::Backtrace;
 use std::error::Error as StdError;
 use std::fmt;
@@ -12,11 +14,17 @@ use reqwest::header;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// The server returned a non-success HTTP status.
     Status,
+    /// Client-side input validation failed before or after a request.
     Validation,
+    /// A client state transition could not be completed safely.
     Synchronization,
+    /// An internal dependency or serialization failure occurred.
     Internal,
+    /// WebSocket transport or protocol handling failed.
     WebSocket,
+    /// Access was blocked by Polymarket's geographic restrictions.
     Geoblock,
 }
 
@@ -51,6 +59,11 @@ impl Error {
     #[must_use]
     pub fn inner(&self) -> Option<&(dyn StdError + Send + Sync + 'static)> {
         self.source.as_deref()
+    }
+
+    #[must_use]
+    pub fn downcast_ref<E: StdError + 'static>(&self) -> Option<&E> {
+        self.source.as_deref()?.downcast_ref::<E>()
     }
 
     #[must_use]
@@ -271,5 +284,52 @@ impl From<ParseError> for Error {
 impl From<tokio_tungstenite::tungstenite::Error> for Error {
     fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
         Self::with_source(Kind::WebSocket, error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geoblock_display_should_succeed() {
+        let geoblock = Geoblock {
+            ip: "192.168.1.1".to_owned(),
+            country: "US".to_owned(),
+            region: "NY".to_owned(),
+        };
+
+        assert_eq!(
+            geoblock.to_string(),
+            "access blocked from country: US, region: NY, ip: 192.168.1.1"
+        );
+    }
+
+    #[test]
+    fn geoblock_into_error_should_succeed() {
+        let geoblock = Geoblock {
+            ip: "10.0.0.1".to_owned(),
+            country: "CU".to_owned(),
+            region: "HAV".to_owned(),
+        };
+
+        let error: Error = geoblock.into();
+
+        assert_eq!(error.kind(), Kind::Geoblock);
+        assert!(error.to_string().contains("CU"), "geoblock country should be preserved");
+    }
+
+    #[test]
+    fn validation_conversion_preserves_kind_and_downcast() {
+        let error: Error = Validation {
+            reason: "bad order".to_owned(),
+        }
+        .into();
+
+        assert_eq!(error.kind(), Kind::Validation);
+        assert_eq!(
+            error.downcast_ref::<Validation>().map(|inner| inner.reason.as_str()),
+            Some("bad order"),
+        );
     }
 }

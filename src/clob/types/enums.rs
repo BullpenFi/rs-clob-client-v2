@@ -142,6 +142,7 @@ pub enum PriceHistoryInterval {
     OneHour,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoundConfig {
     pub price: u32,

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::Deserialize as _;
 use serde::de::{self, DeserializeOwned, Visitor};
 use serde_json::Value;
 
@@ -23,32 +23,32 @@ impl<'de> serde_with::DeserializeAs<'de, String> for StringFromAny {
                 formatter.write_str("string or integer")
             }
 
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                Ok(value.to_owned())
+                Ok(v.to_owned())
             }
 
-            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+            fn visit_string<E>(self, v: String) -> std::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                Ok(value)
+                Ok(v)
             }
 
-            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                Ok(value.to_string())
+                Ok(v.to_string())
             }
 
-            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                Ok(value.to_string())
+                Ok(v.to_string())
             }
         }
 

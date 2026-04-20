@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use bon::Builder;
+use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Credentials;
@@ -26,6 +27,40 @@ pub struct ApiKeysResponse {
     #[builder(default)]
     #[serde(default)]
     pub api_keys: Vec<Credentials>,
+}
+
+impl Serialize for ApiKeysResponse {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct SerializableCredentials<'credentials> {
+            #[serde(rename = "apiKey")]
+            key: crate::auth::ApiKey,
+            secret: &'credentials str,
+            passphrase: &'credentials str,
+        }
+
+        #[derive(Serialize)]
+        struct SerializableApiKeysResponse<'credentials> {
+            #[serde(rename = "apiKeys")]
+            api_keys: Vec<SerializableCredentials<'credentials>>,
+        }
+
+        SerializableApiKeysResponse {
+            api_keys: self
+                .api_keys
+                .iter()
+                .map(|credentials| SerializableCredentials {
+                    key: credentials.key(),
+                    secret: credentials.secret().expose_secret(),
+                    passphrase: credentials.passphrase().expose_secret(),
+                })
+                .collect(),
+        }
+        .serialize(serializer)
+    }
 }
 
 #[non_exhaustive]
@@ -122,14 +157,19 @@ pub struct OpenOrder {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq, Eq)]
 pub struct OrderResponse {
     pub success: bool,
+    #[serde(rename = "errorMsg")]
     #[serde(default)]
     pub error_msg: Option<String>,
+    #[serde(rename = "orderID")]
     pub order_id: String,
+    #[serde(rename = "transactionsHashes")]
     #[builder(default)]
     #[serde(default)]
     pub transactions_hashes: Vec<String>,
     pub status: String,
+    #[serde(rename = "takingAmount")]
     pub taking_amount: String,
+    #[serde(rename = "makingAmount")]
     pub making_amount: String,
 }
 
@@ -179,3 +219,32 @@ pub struct ErrorResponse {
 }
 
 pub type NotificationsResponse = Vec<Notification>;
+
+#[cfg(test)]
+mod tests {
+    use super::OrderResponse;
+
+    #[test]
+    fn order_response_deserializes_api_camel_case_fields() {
+        let response: OrderResponse = serde_json::from_str(
+            r#"{
+                "success": true,
+                "errorMsg": "",
+                "orderID": "abc",
+                "transactionsHashes": [],
+                "status": "live",
+                "takingAmount": "100",
+                "makingAmount": "50"
+            }"#,
+        )
+        .expect("order response should deserialize");
+
+        assert!(response.success);
+        assert_eq!(response.error_msg.as_deref(), Some(""));
+        assert_eq!(response.order_id, "abc");
+        assert!(response.transactions_hashes.is_empty());
+        assert_eq!(response.status, "live");
+        assert_eq!(response.taking_amount, "100");
+        assert_eq!(response.making_amount, "50");
+    }
+}

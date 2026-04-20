@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Order model and helper names intentionally mirror the public API surface"
+)]
+
 use std::borrow::Cow;
 
 use alloy::core::sol;
@@ -15,6 +20,10 @@ pub const CTF_EXCHANGE_V2_DOMAIN_VERSION: &str = "2";
 
 sol! {
     #[derive(Debug, PartialEq, Eq)]
+    #[allow(
+        clippy::exhaustive_structs,
+        reason = "The signed order struct must exactly match Polymarket's EIP-712 schema"
+    )]
     struct Order {
         uint256 salt;
         address maker;
@@ -30,6 +39,7 @@ sol! {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignableOrder {
     pub order: Order,
@@ -37,10 +47,14 @@ pub struct SignableOrder {
     // typed-data struct or on-chain V2 Order tuple and must not affect the signing hash.
     pub expiration: u64,
     pub order_type: OrderType,
+    // The TS V2 client always serializes `postOnly`, including `false` for FOK/FAK
+    // orders. The server rejects only unsupported `true` combinations, so keeping a
+    // concrete bool here is intentional.
     pub post_only: bool,
     pub defer_exec: bool,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedOrder {
     pub order: Order,
@@ -80,6 +94,10 @@ pub async fn sign_order<S: Signer>(
 }
 
 #[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The constructor mirrors Polymarket's fixed V2 order schema"
+)]
 pub fn new_order(
     salt: U256,
     maker: Address,

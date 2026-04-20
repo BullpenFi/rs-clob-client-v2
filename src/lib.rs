@@ -1,10 +1,3 @@
-#![allow(
-    clippy::items_after_statements,
-    clippy::module_name_repetitions,
-    clippy::multiple_crate_versions,
-    clippy::struct_excessive_bools,
-    clippy::too_many_arguments
-)]
 #![cfg_attr(doc, doc = include_str!("../README.md"))]
 
 pub mod auth;
@@ -32,6 +25,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub const POLYGON: ChainId = 137;
 pub const AMOY: ChainId = 80002;
+pub const PRIVATE_KEY_VAR: &str = "POLYMARKET_PRIVATE_KEY";
 
 pub(crate) type Timestamp = i64;
 
@@ -103,7 +97,9 @@ pub(crate) async fn request<Response: DeserializeOwned>(
             }
             Err(error) => {
                 let should_retry =
-                    attempt == 0 && retry_request.is_some() && (error.is_connect() || error.is_timeout());
+                    attempt == 0
+                        && retry_request.is_some()
+                        && (error.is_connect() || error.is_timeout() || error.is_request());
                 if should_retry {
                     sleep(Duration::from_millis(30)).await;
                     request = retry_request

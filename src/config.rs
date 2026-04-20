@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Config naming intentionally follows the external contract terminology"
+)]
+
 use alloy::primitives::ChainId;
 use phf::phf_map;
 

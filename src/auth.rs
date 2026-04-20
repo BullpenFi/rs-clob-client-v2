@@ -1,8 +1,10 @@
+//! Authentication helpers for Polymarket's Level 1, Level 2, and builder flows.
+
 pub use alloy::signers::Signer;
 pub use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use async_trait::async_trait;
 use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE};
 use hmac::{Hmac, Mac as _};
 use reqwest::header::HeaderMap;
 use reqwest::{Body, Request};
@@ -15,9 +17,10 @@ use crate::{Error, Result, Timestamp};
 
 pub type ApiKey = Uuid;
 
+/// API credentials used for Level 2 authenticated requests.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Credentials {
-    #[serde(alias = "apiKey")]
+    #[serde(alias = "apiKey", rename = "apiKey")]
     pub(crate) key: ApiKey,
     pub(crate) secret: SecretString,
     pub(crate) passphrase: SecretString,
@@ -148,6 +151,7 @@ pub mod l1 {
 
     use alloy::core::sol;
     use alloy::dyn_abi::Eip712Domain;
+    use alloy::hex::ToHexExt as _;
     use alloy::primitives::{ChainId, U256};
     use alloy::signers::Signer;
     use alloy::sol_types::SolStruct as _;
@@ -162,6 +166,10 @@ pub mod l1 {
 
     sol! {
         #[derive(Debug)]
+        #[allow(
+            clippy::exhaustive_structs,
+            reason = "The typed-data struct must match Polymarket's fixed EIP-712 schema"
+        )]
         struct ClobAuth {
             address address;
             string timestamp;
@@ -196,7 +204,7 @@ pub mod l1 {
         let signature = signer.sign_hash(&hash).await?;
 
         let mut map = HeaderMap::new();
-        map.insert(POLY_ADDRESS, signer.address().to_string().parse()?);
+        map.insert(POLY_ADDRESS, signer.address().encode_hex_with_prefix().parse()?);
         map.insert(POLY_NONCE, nonce.to_string().parse()?);
         map.insert(POLY_SIGNATURE, signature.to_string().parse()?);
         map.insert(POLY_TIMESTAMP, timestamp.to_string().parse()?);
@@ -206,6 +214,7 @@ pub mod l1 {
 }
 
 pub mod l2 {
+    use alloy::hex::ToHexExt as _;
     use reqwest::Request;
     use reqwest::header::HeaderMap;
     use secrecy::ExposeSecret as _;
@@ -228,7 +237,7 @@ pub mod l2 {
         let signature = hmac(&state.credentials.secret, &to_message(request, timestamp)?)?;
 
         let mut map = HeaderMap::new();
-        map.insert(POLY_ADDRESS, state.address.to_string().parse()?);
+        map.insert(POLY_ADDRESS, state.address.encode_hex_with_prefix().parse()?);
         map.insert(POLY_API_KEY, state.credentials.key.to_string().parse()?);
         map.insert(
             POLY_PASSPHRASE,
@@ -404,14 +413,30 @@ fn body_to_string(body: &Body) -> Result<String> {
         .as_bytes()
         .ok_or_else(|| Error::validation("request body is not available for HMAC signing"))?;
     let body = std::str::from_utf8(bytes)
-        .map_err(|_| Error::validation("request body is not valid UTF-8 for HMAC signing"))?;
-    Ok(body.replace('\'', "\""))
+        .map_err(|_utf8_error| Error::validation("request body is not valid UTF-8 for HMAC signing"))?;
+    Ok(body.to_owned())
 }
 
 fn hmac(secret: &SecretString, message: &str) -> Result<String> {
-    let decoded_secret = URL_SAFE.decode(secret.expose_secret())?;
+    let decoded_secret = STANDARD.decode(secret.expose_secret())?;
     let mut mac = Hmac::<Sha256>::new_from_slice(&decoded_secret)?;
     mac.update(message.as_bytes());
     let result = mac.finalize().into_bytes();
     Ok(URL_SAFE.encode(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SecretString, hmac};
+
+    #[test]
+    fn hmac_supports_standard_base64_secrets_with_plus_and_slash() {
+        let signature = hmac(
+            &SecretString::from("++//".to_owned()),
+            "1700000000GET/auth/api-keys",
+        )
+        .expect("standard base64 secret should decode");
+
+        assert_eq!(signature, "HbYWv2kCKePei7BtC17tq5d1fDwa21OBD_KBfuKXvjI=");
+    }
 }

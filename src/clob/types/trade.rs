@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Trade model names intentionally track Polymarket's API naming"
+)]
+
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 

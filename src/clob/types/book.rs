@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 // SHA-1 is used here for API compatibility with Polymarket's orderbook hash,
 // not for cryptographic security. Do not replace with SHA-256.
 use sha1::{Digest as _, Sha1};
@@ -12,9 +13,12 @@ use crate::types::Decimal;
 use crate::Result;
 
 #[non_exhaustive]
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct OrderSummary {
+    #[serde_as(as = "DisplayFromStr")]
     pub price: Decimal,
+    #[serde_as(as = "DisplayFromStr")]
     pub size: Decimal,
 }
 
@@ -100,5 +104,24 @@ impl OrderBookSummary {
         let mut hasher = Sha1::new();
         hasher.update(json.as_bytes());
         Ok(format!("{:x}", hasher.finalize()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrderSummary;
+    use crate::types::Decimal;
+    use std::str::FromStr as _;
+
+    #[test]
+    fn order_summary_serializes_decimal_fields_as_strings() {
+        let summary = OrderSummary {
+            price: Decimal::from_str("0.5").expect("decimal"),
+            size: Decimal::from_str("100").expect("decimal"),
+        };
+
+        let json = serde_json::to_value(&summary).expect("order summary json");
+        assert_eq!(json["price"], "0.5");
+        assert_eq!(json["size"], "100");
     }
 }

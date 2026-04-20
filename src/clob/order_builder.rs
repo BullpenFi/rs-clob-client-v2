@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use std::str::FromStr;
+use std::str::FromStr as _;
 
 use alloy::primitives::{B256, U256};
 use bon::Builder;
@@ -182,6 +182,11 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
 
         let tick_size = self.client.tick_size(token_id).await?;
         let minimum_tick_size = tick_size.as_decimal();
+        if price.normalize().scale() > minimum_tick_size.normalize().scale() {
+            return Err(Error::validation(format!(
+                "price has too many decimal places for tick size {tick_size}"
+            )));
+        }
         if price < minimum_tick_size || price > Decimal::ONE - minimum_tick_size {
             return Err(Error::validation(format!(
                 "price {price} must be between {minimum_tick_size} and {}",
@@ -240,6 +245,10 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
     }
 
     #[must_use]
+    /// Sets the market-order amount.
+    ///
+    /// For BUY orders this value is denominated in USDC. For SELL orders it is
+    /// denominated in shares, matching the TypeScript V2 client semantics.
     pub fn amount(mut self, amount: Decimal) -> Self {
         self.amount = Some(amount);
         self
@@ -363,7 +372,7 @@ fn generate_salt() -> U256 {
 
 fn current_timestamp_millis() -> Result<u64> {
     u64::try_from(chrono::Utc::now().timestamp_millis())
-        .map_err(|_| Error::validation("timestamp is negative"))
+        .map_err(|_conversion_error| Error::validation("timestamp is negative"))
 }
 
 fn round_normal(value: Decimal, decimals: u32) -> Decimal {

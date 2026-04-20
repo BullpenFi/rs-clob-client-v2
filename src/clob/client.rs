@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::{future::Future, str::FromStr};
+use std::{future::Future, str::FromStr as _};
 
 use alloy::primitives::U256;
 use alloy::signers::Signer;
 use bon::Builder;
 use dashmap::DashMap;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client as ReqwestClient, Method, Request};
 use rust_decimal::prelude::ToPrimitive as _;
 use serde::Serialize;
@@ -34,7 +34,7 @@ use crate::clob::types::{
     TradesPaginatedResponse, TotalUserEarning, UserEarning, UserRewardsEarning, sign_order as sign_v2_order,
 };
 use crate::config::exchange_contract;
-use crate::error::{Error, Kind as ErrorKind};
+use crate::error::Error;
 use crate::types::{Address, Decimal};
 use crate::{Result, Timestamp, auth};
 
@@ -45,6 +45,12 @@ fn builder_fee_rate_to_bps(rate: f64) -> u32 {
     let scaled =
         Decimal::from_str(&rate.to_string()).unwrap_or(Decimal::ZERO) * Decimal::from(10_000_u32);
     scaled.round_dp(0).to_u32().unwrap_or_default()
+}
+
+fn builder_fee_rate_from_bps(rate_bps: u32) -> f64 {
+    (Decimal::from(rate_bps) / Decimal::from(10_000_u32))
+        .to_f64()
+        .unwrap_or_default()
 }
 
 pub struct AuthenticationBuilder<'signer, S: Signer, K: Kind = Normal> {
@@ -109,6 +115,22 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
             )));
         }
 
+        let signature_type = self.signature_type.unwrap_or(SignatureTypeV2::Eoa);
+        if signature_type == SignatureTypeV2::Eoa && self.funder.is_some() {
+            return Err(Error::validation(
+                "funder address is not supported with EOA signature type",
+            ));
+        }
+        if matches!(
+            signature_type,
+            SignatureTypeV2::Proxy | SignatureTypeV2::GnosisSafe
+        ) && self.funder.is_none_or(|funder| funder.is_zero())
+        {
+            return Err(Error::validation(
+                "non-zero funder address is required for Proxy/GnosisSafe signature types",
+            ));
+        }
+
         let credentials = match self.credentials {
             Some(_) if self.nonce.is_some() => {
                 return Err(Error::validation(
@@ -135,7 +157,7 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
                 token_condition_map: inner.token_condition_map.clone(),
                 builder_fee_rates: inner.builder_fee_rates.clone(),
                 funder: self.funder,
-                signature_type: self.signature_type.unwrap_or(SignatureTypeV2::Eoa),
+                signature_type,
                 builder: inner.builder.clone(),
                 cached_version: AtomicU32::new(cached_version),
             }),
@@ -202,6 +224,7 @@ impl<S: State> ClientInner<S> {
         Query: Serialize,
         Body: Serialize,
     {
+        let should_retry = self.config.retry_on_error && method == Method::POST;
         let mut request = self.client.request(method, self.endpoint(path)?);
         if let Some(query) = query {
             request = request.query(query);
@@ -213,7 +236,7 @@ impl<S: State> ClientInner<S> {
             &self.client,
             request.build()?,
             headers,
-            self.config.retry_on_error,
+            should_retry,
         )
         .await
     }
@@ -273,10 +296,7 @@ impl ClientInner<Unauthenticated> {
     ) -> Result<Credentials> {
         match self.create_api_key(signer, nonce).await {
             Ok(credentials) => Ok(credentials),
-            Err(error) if error.kind() == ErrorKind::Status => {
-                self.derive_api_key(signer, nonce).await
-            }
-            Err(error) => Err(error),
+            Err(_) => self.derive_api_key(signer, nonce).await,
         }
     }
 }
@@ -499,6 +519,11 @@ impl<S: State> Client<S> {
     }
 
     pub async fn neg_risk(&self, token_id: U256) -> Result<bool> {
+        #[derive(Serialize)]
+        struct Query {
+            token_id: String,
+        }
+
         if let Some(neg_risk) = self.inner.neg_risk.get(&token_id) {
             return Ok(*neg_risk);
         }
@@ -508,11 +533,6 @@ impl<S: State> Client<S> {
             if let Some(neg_risk) = self.inner.neg_risk.get(&token_id) {
                 return Ok(*neg_risk);
             }
-        }
-
-        #[derive(Serialize)]
-        struct Query {
-            token_id: String,
         }
 
         let response: crate::clob::types::NegRiskResponse = self
@@ -528,13 +548,13 @@ impl<S: State> Client<S> {
     }
 
     pub async fn fee_rate_bps(&self, token_id: U256) -> Result<u32> {
-        if let Some(base_fee) = self.inner.fee_rate_bps.get(&token_id) {
-            return Ok(*base_fee);
-        }
-
         #[derive(Serialize)]
         struct Query {
             token_id: String,
+        }
+
+        if let Some(base_fee) = self.inner.fee_rate_bps.get(&token_id) {
+            return Ok(*base_fee);
         }
 
         let response: FeeRateResponse = self
@@ -683,6 +703,11 @@ impl<S: State> Client<S> {
     }
 
     async fn ensure_market_info_cached(&self, token_id: U256) -> Result<()> {
+        #[derive(Deserialize)]
+        struct MarketByTokenResponse {
+            condition_id: String,
+        }
+
         if self.inner.fee_infos.contains_key(&token_id) {
             return Ok(());
         }
@@ -690,11 +715,6 @@ impl<S: State> Client<S> {
         if let Some(condition_id) = self.inner.token_condition_map.get(&token_id) {
             self.clob_market_info(condition_id.value()).await?;
             return Ok(());
-        }
-
-        #[derive(Deserialize)]
-        struct MarketByTokenResponse {
-            condition_id: String,
         }
 
         let response: MarketByTokenResponse = self
@@ -738,13 +758,23 @@ impl Client<Unauthenticated> {
                 "only HTTPS URLs are accepted; set allow_insecure for local dev",
             ));
         }
+        let mut default_headers = HeaderMap::new();
+        default_headers.insert(
+            "User-Agent",
+            HeaderValue::from_static("polymarket-clob-client-v2"),
+        );
+        default_headers.insert("Accept", HeaderValue::from_static("*/*"));
+        default_headers.insert("Connection", HeaderValue::from_static("keep-alive"));
+        default_headers.insert("Content-Type", HeaderValue::from_static("application/json"));
         let builder = config.builder.clone();
         Ok(Client {
             inner: Arc::new(ClientInner {
                 config,
                 state: Unauthenticated,
                 host,
-                client: ReqwestClient::new(),
+                client: ReqwestClient::builder()
+                    .default_headers(default_headers)
+                    .build()?,
                 tick_sizes: DashMap::new(),
                 neg_risk: DashMap::new(),
                 fee_infos: DashMap::new(),
@@ -760,10 +790,10 @@ impl Client<Unauthenticated> {
     }
 
     #[must_use]
-    pub fn authentication_builder<'a, S: Signer>(
+    pub fn authentication_builder<'signer, S: Signer>(
         &self,
-        signer: &'a S,
-    ) -> AuthenticationBuilder<'a, S, Normal> {
+        signer: &'signer S,
+    ) -> AuthenticationBuilder<'signer, S, Normal> {
         AuthenticationBuilder {
             client: self.clone(),
             signer,
@@ -847,6 +877,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         Query: Serialize,
         Body: Serialize,
     {
+        let should_retry = self.inner.config.retry_on_error && method == Method::POST;
         let mut request = self.inner.client.request(method, self.inner.endpoint(path)?);
         if let Some(query) = query {
             request = request.query(query);
@@ -860,7 +891,7 @@ impl<K: Kind> Client<Authenticated<K>> {
             &self.inner.client,
             request,
             Some(headers),
-            self.inner.config.retry_on_error,
+            should_retry,
         )
         .await
     }
@@ -960,9 +991,9 @@ impl<K: Kind> Client<Authenticated<K>> {
         next_cursor: Option<String>,
     ) -> Result<Page<OpenOrder>> {
         #[derive(Serialize)]
-        struct Query<'a> {
+        struct Query<'request> {
             #[serde(flatten)]
-            request: &'a OpenOrdersRequest,
+            request: &'request OpenOrdersRequest,
             next_cursor: Option<String>,
         }
 
@@ -1020,9 +1051,9 @@ impl<K: Kind> Client<Authenticated<K>> {
         next_cursor: Option<String>,
     ) -> Result<TradesPaginatedResponse> {
         #[derive(Serialize)]
-        struct Query<'a> {
+        struct Query<'request> {
             #[serde(flatten)]
-            request: &'a TradeParams,
+            request: &'request TradeParams,
             next_cursor: Option<String>,
         }
 
@@ -1342,8 +1373,8 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.inner.builder_fee_rates.insert(
             builder_code.to_owned(),
             BuilderFeeRate {
-                maker: f64::from(response.builder_maker_fee_rate_bps) / 10_000.0,
-                taker: f64::from(response.builder_taker_fee_rate_bps) / 10_000.0,
+                maker: builder_fee_rate_from_bps(response.builder_maker_fee_rate_bps),
+                taker: builder_fee_rate_from_bps(response.builder_taker_fee_rate_bps),
             },
         );
 
@@ -1365,6 +1396,13 @@ impl<K: Kind> Client<Authenticated<K>> {
         request: &BuilderTradeParams,
         next_cursor: Option<String>,
     ) -> Result<BuilderTradesResponse> {
+        #[derive(Serialize)]
+        struct Query<'request> {
+            #[serde(flatten)]
+            request: &'request BuilderTradeParams,
+            next_cursor: Option<String>,
+        }
+
         let builder_code = request
             .builder_code
             .as_ref()
@@ -1374,13 +1412,6 @@ impl<K: Kind> Client<Authenticated<K>> {
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         ) {
             return Err(Error::validation("builder_code cannot be zero"));
-        }
-
-        #[derive(Serialize)]
-        struct Query<'a> {
-            #[serde(flatten)]
-            request: &'a BuilderTradeParams,
-            next_cursor: Option<String>,
         }
 
         let page: Page<BuilderTrade> = self
@@ -1545,7 +1576,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         let response = submit().await?;
         if is_order_version_mismatch(&response) {
             self.invalidate_cached_version();
-            let _ = self.version().await?;
+            let _: u32 = self.version().await?;
             return deserialize_order_response(submit().await?);
         }
 
@@ -1576,6 +1607,9 @@ struct PostOrderEnvelope {
     salt: u64,
     maker: String,
     signer: String,
+    // TS V2's `orderToJsonV2` references `order.taker`, but V2 orders do not
+    // define a taker field, so the value is `undefined` and omitted from JSON.
+    // Rust intentionally omits the field for parity with the effective payload.
     #[serde(rename = "tokenId")]
     token_id: String,
     #[serde(rename = "makerAmount")]
@@ -1596,7 +1630,7 @@ fn build_post_order_payload(order: &SignedOrder) -> Result<PostOrderPayload> {
     Ok(PostOrderPayload {
         order: PostOrderEnvelope {
             salt: u64::try_from(order.order.salt)
-                .map_err(|_| Error::validation("salt does not fit in u64"))?,
+                .map_err(|_conversion_error| Error::validation("salt does not fit in u64"))?,
             maker: order.order.maker.to_string(),
             signer: order.order.signer.to_string(),
             token_id: order.order.tokenId.to_string(),
@@ -1658,6 +1692,7 @@ mod tests {
 
     use super::*;
     use crate::auth::{Credentials, PrivateKeySigner};
+    use crate::error::Kind as ErrorKind;
 
     fn signer() -> PrivateKeySigner {
         PrivateKeySigner::from_str(
@@ -1728,12 +1763,12 @@ mod tests {
                     } else {
                         Ok(serde_json::json!({
                             "success": true,
-                            "error_msg": null,
-                            "order_id": "retry-ok",
-                            "transactions_hashes": [],
+                            "errorMsg": null,
+                            "orderID": "retry-ok",
+                            "transactionsHashes": [],
                             "status": "live",
-                            "taking_amount": "100",
-                            "making_amount": "50"
+                            "takingAmount": "100",
+                            "makingAmount": "50"
                         }))
                     }
                 }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Market-prefixed API models intentionally mirror Polymarket's schema names"
+)]
+
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -120,6 +125,10 @@ pub struct UserRewardsEarning {
 }
 
 #[non_exhaustive]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "The market payload is a direct mirror of Polymarket's boolean-heavy API response"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct Market {
     pub enable_order_book: bool,

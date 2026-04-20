@@ -1,3 +1,8 @@
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "The websocket configuration type intentionally uses the conventional Config name"
+)]
+
 use std::str::FromStr;
 
 use bon::Builder;
@@ -5,6 +10,7 @@ use url::Url;
 
 use crate::Result;
 
+#[non_exhaustive]
 #[derive(Clone, Debug, Builder)]
 pub struct Config {
     pub url: Url,
