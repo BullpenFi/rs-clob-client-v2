@@ -1,0 +1,6 @@
+[submodule "references/rs-clob-client"]
+	path = references/rs-clob-client
+	url = https://github.com/Polymarket/rs-clob-client
+[submodule "references/clob-client-v2"]
+	path = references/clob-client-v2
+	url = https://github.com/Polymarket/clob-client-v2
