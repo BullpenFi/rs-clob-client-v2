@@ -4,7 +4,7 @@ pub use alloy::signers::Signer;
 pub use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use async_trait::async_trait;
 use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+use base64::engine::general_purpose::URL_SAFE;
 use hmac::{Hmac, Mac as _};
 use reqwest::header::HeaderMap;
 use reqwest::{Body, Request};
@@ -464,7 +464,7 @@ fn body_to_string(body: &Body) -> Result<String> {
 }
 
 fn hmac(secret: &SecretString, message: &str) -> Result<String> {
-    let decoded_secret = STANDARD.decode(secret.expose_secret())?;
+    let decoded_secret = URL_SAFE.decode(secret.expose_secret())?;
     let mut mac = Hmac::<Sha256>::new_from_slice(&decoded_secret)?;
     mac.update(message.as_bytes());
     let result = mac.finalize().into_bytes();
@@ -476,12 +476,12 @@ mod tests {
     use super::{SecretString, hmac};
 
     #[test]
-    fn hmac_supports_standard_base64_secrets_with_plus_and_slash() {
+    fn hmac_supports_url_safe_base64_secrets_with_dash_and_underscore() {
         let signature = hmac(
-            &SecretString::from("++//".to_owned()),
+            &SecretString::from("--__".to_owned()),
             "1700000000GET/auth/api-keys",
         )
-        .expect("standard base64 secret should decode");
+        .expect("url-safe base64 secret should decode");
 
         assert_eq!(signature, "HbYWv2kCKePei7BtC17tq5d1fDwa21OBD_KBfuKXvjI=");
     }
