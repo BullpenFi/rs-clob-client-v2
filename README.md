@@ -36,7 +36,27 @@ Use this repository as a git dependency:
 polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", branch = "main" }
 ```
 
-When Polymarket releases an official Rust V2 SDK, the intended migration should be mostly a dependency source change rather than a crate-path rewrite.
+Do not depend on this crate from crates.io. This repository intentionally keeps `publish = false` even though it uses the official package/import name.
+
+## Intended migration path
+
+The point of using the official package/import name here is to minimize downstream churn during testing. Consumer code should import this crate exactly the same way it would import an eventual official Rust SDK:
+
+```rust
+use polymarket_client_sdk::clob::Client;
+```
+
+When Polymarket releases an official Rust V2 SDK, the intended migration should be a dependency-source swap, not a crate-path rewrite. In practice, the change should look like this:
+
+```toml
+# Current testing setup
+[dependencies]
+polymarket-client-sdk = { git = "https://github.com/BullpenFi/rs-clob-client-v2", branch = "main" }
+
+# Intended future setup once Polymarket ships an official Rust V2 SDK
+[dependencies]
+polymarket-client-sdk = "<official-version>"
+```
 
 ## Crate layout
 
@@ -110,3 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - Default: REST client and V2 order builder
 - `ws`: generic WebSocket transport and CLOB subscription scaffolding
+
+## Toolchain
+
+- Current declared MSRV: Rust 1.91
+- CI/CD is pinned to the same Rust line so the checked-in dependency graph and workflow environment stay aligned
+- The official Polymarket V1 crate currently declares an older MSRV; this unofficial V2 repo follows the official packaging model, but not necessarily the exact same compiler floor
