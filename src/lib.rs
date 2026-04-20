@@ -77,8 +77,10 @@ pub(crate) async fn request<Response: DeserializeOwned>(
     let path = request.url().path().to_owned();
 
     for attempt in 0..=1 {
-        if let Some(header_map) = headers.clone() {
-            *request.headers_mut() = header_map;
+        if let Some(header_map) = headers.as_ref() {
+            for (name, value) in header_map {
+                request.headers_mut().insert(name, value.clone());
+            }
         }
 
         match client.execute(request).await {
@@ -135,4 +137,106 @@ pub(crate) async fn request<Response: DeserializeOwned>(
     }
 
     unreachable!("request loop either returns or retries once")
+}
+
+#[cfg(test)]
+mod tests {
+    use httpmock::Method::{GET, POST};
+    use httpmock::MockServer;
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    use serde::Deserialize;
+    use serde_json::json;
+    use tokio::time::{Duration, sleep};
+
+    use super::request as send_request;
+
+    #[derive(Debug, Deserialize)]
+    struct OkResponse {
+        ok: bool,
+    }
+
+    fn auth_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("poly_api_key"),
+            HeaderValue::from_static("api-key"),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn request_merges_existing_request_headers_with_supplied_headers() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/merge")
+                .header("x-test-existing", "keep-me")
+                .header("poly_api_key", "api-key");
+            then.status(200).json_body_obj(&json!({ "ok": true }));
+        });
+
+        let client = reqwest::Client::new();
+        let built_request = client
+            .get(server.url("/merge"))
+            .header("x-test-existing", "keep-me")
+            .build()
+            .expect("request");
+
+        let response: OkResponse = send_request(&client, built_request, Some(auth_headers()), false)
+            .await
+            .expect("response");
+
+        mock.assert();
+        assert!(response.ok);
+    }
+
+    #[tokio::test]
+    async fn request_retry_preserves_existing_request_headers() {
+        let server = MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/retry-merge")
+                    .header("x-test-existing", "keep-me")
+                    .header("poly_api_key", "api-key");
+                then.status(500).body("boom");
+            })
+            .await;
+
+        let client = reqwest::Client::new();
+        let built_request = client
+            .post(server.url("/retry-merge"))
+            .header("x-test-existing", "keep-me")
+            .json(&json!({ "ok": true }))
+            .build()
+            .expect("request");
+
+        let switch_mock = async {
+            loop {
+                if first.calls_async().await == 1 {
+                    first.delete_async().await;
+                    return server
+                        .mock_async(|when, then| {
+                            when.method(POST)
+                                .path("/retry-merge")
+                                .header("x-test-existing", "keep-me")
+                                .header("poly_api_key", "api-key");
+                            then.status(200).json_body_obj(&json!({ "ok": true }));
+                        })
+                        .await;
+                }
+
+                sleep(Duration::from_millis(5)).await;
+            }
+        };
+
+        let (second, response) = tokio::join!(
+            switch_mock,
+            send_request(&client, built_request, Some(auth_headers()), true)
+        );
+        let response: OkResponse = response.expect("response");
+
+        second.assert_calls(1);
+        assert!(response.ok);
+    }
 }

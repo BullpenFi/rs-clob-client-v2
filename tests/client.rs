@@ -183,6 +183,10 @@ async fn authenticated_api_keys_endpoint_signs_l2_headers() {
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/auth/api-keys")
+            .header("user-agent", "@polymarket/clob-client")
+            .header("accept", "*/*")
+            .header("connection", "keep-alive")
+            .header("content-type", "application/json")
             .header("POLY_API_KEY", "00000000-0000-0000-0000-000000000000")
             .header("POLY_ADDRESS", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
         then.status(200)
@@ -194,6 +198,34 @@ async fn authenticated_api_keys_endpoint_signs_l2_headers() {
     let response = client.api_keys().await.expect("api keys");
     mock.assert();
     assert!(response.api_keys.is_empty());
+}
+
+#[tokio::test]
+async fn authentication_promotes_client_without_copying_cache_state() {
+    let signer = common::signer();
+    let token_id = U256::from(777_u64);
+
+    let client = Client::new("https://example.com", Config::default()).expect("client");
+    client.set_tick_size(token_id, TickSize::Hundredth);
+
+    let authenticated = client
+        .authentication_builder(&signer)
+        .credentials(common::credentials())
+        .authenticate()
+        .await
+        .expect("authenticated client");
+
+    client.set_tick_size(token_id, TickSize::Thousandth);
+    assert_eq!(
+        authenticated.tick_size(token_id).await.expect("shared cache"),
+        TickSize::Thousandth
+    );
+
+    authenticated.set_tick_size(token_id, TickSize::TenThousandth);
+    assert_eq!(
+        client.tick_size(token_id).await.expect("shared cache"),
+        TickSize::TenThousandth
+    );
 }
 
 #[tokio::test]
@@ -771,7 +803,7 @@ async fn pagination_collects_all_pages() {
 }
 
 #[tokio::test]
-async fn pagination_stops_on_empty_page() {
+async fn pagination_continues_after_empty_non_terminal_page() {
     let server = MockServer::start();
     let first = server.mock(|when, then| {
         when.method(GET)
@@ -792,7 +824,7 @@ async fn pagination_stops_on_empty_page() {
             "limit": 1,
             "count": 1,
             "next_cursor": "LTE=",
-            "data": [sample_open_order_json("order-should-not-load")]
+            "data": [sample_open_order_json("order-2")]
         }));
     });
 
@@ -807,8 +839,9 @@ async fn pagination_stops_on_empty_page() {
         .expect("open orders");
 
     first.assert_calls(1);
-    second.assert_calls(0);
-    assert!(orders.is_empty());
+    second.assert_calls(1);
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0].id, "order-2");
 }
 
 #[tokio::test]

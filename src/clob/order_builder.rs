@@ -60,7 +60,6 @@ pub struct UserMarketOrder {
 pub struct OrderBuilder<OrderKind, K: AuthKind> {
     client: Client<Authenticated<K>>,
     signer: Address,
-    maker: Address,
     signature_type: SignatureTypeV2,
     signer_factory: Option<SignerFactory>,
     token_id: Option<U256>,
@@ -82,7 +81,6 @@ impl<OrderKind, K: AuthKind> std::fmt::Debug for OrderBuilder<OrderKind, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OrderBuilder")
             .field("signer", &self.signer)
-            .field("maker", &self.maker)
             .field("signature_type", &self.signature_type)
             .field("has_signer_factory", &self.signer_factory.is_some())
             .field("token_id", &self.token_id)
@@ -122,7 +120,6 @@ impl ResolvedSigner<'_> {
 impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
     pub(crate) fn new(client: Client<Authenticated<K>>) -> Self {
         let signer = client.address();
-        let maker = client.funder().unwrap_or(signer);
         let signature_type = client.signature_type();
         let builder_code = client
             .builder_config()
@@ -132,7 +129,6 @@ impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
         Self {
             client,
             signer,
-            maker,
             signature_type,
             signer_factory,
             token_id: None,
@@ -224,6 +220,10 @@ impl<OrderKind, K: AuthKind> OrderBuilder<OrderKind, K> {
 
         Ok(self.signer)
     }
+
+    fn resolve_maker(&self, signer: Address) -> Address {
+        self.client.funder().unwrap_or(signer)
+    }
 }
 
 impl<K: AuthKind> OrderBuilder<Limit, K> {
@@ -296,11 +296,12 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         let round_config = tick_size.round_config();
         let (maker_amount, taker_amount) =
             get_limit_raw_amounts(side, order_size, price, round_config);
+        let maker = self.resolve_maker(signer);
 
         Ok(SignableOrder {
             order: new_order(
                 generate_salt(),
-                self.maker,
+                maker,
                 signer,
                 token_id,
                 to_scaled_u256(maker_amount, USDC_DECIMALS)?,
@@ -321,6 +322,11 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
 
 impl<K: AuthKind> OrderBuilder<Market, K> {
     #[must_use]
+    /// Sets an explicit market-order price.
+    ///
+    /// A zero price is treated as "unset" so the builder falls back to the
+    /// computed market price, matching the TypeScript client's falsy-price
+    /// handling for market orders.
     pub fn price(mut self, price: Decimal) -> Self {
         self.price = Some(price);
         self
@@ -363,6 +369,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         }
 
         let order_type = self.order_type.unwrap_or(OrderType::Fok);
+        validate_market_order_type(order_type)?;
         let post_only = self.post_only.unwrap_or(false);
         let defer_exec = self.defer_exec.unwrap_or(false);
         if post_only {
@@ -373,8 +380,9 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         let tick_size = self.client.tick_size(token_id).await?;
         let price = match self.price {
-            Some(price) => price,
-            None => {
+            Some(price) if !price.is_zero() => price,
+            // Match the TS client, which treats explicit zero as absent.
+            Some(_) | None => {
                 self.client
                     .calculate_market_price(token_id, side, amount, order_type)
                     .await?
@@ -414,11 +422,12 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         };
         let (maker_amount, taker_amount) =
             get_market_raw_amounts(side, amount, price, round_config)?;
+        let maker = self.resolve_maker(signer);
 
         Ok(SignableOrder {
             order: new_order(
                 generate_salt(),
-                self.maker,
+                maker,
                 signer,
                 token_id,
                 to_scaled_u256(maker_amount, USDC_DECIMALS)?,
@@ -450,6 +459,16 @@ fn validate_price_bounds(price: Decimal, minimum_tick_size: Decimal) -> Result<(
             "price {price} must be between {minimum_tick_size} and {}",
             Decimal::ONE - minimum_tick_size
         )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_market_order_type(order_type: OrderType) -> Result<()> {
+    if !matches!(order_type, OrderType::Fok | OrderType::Fak) {
+        return Err(Error::validation(
+            "market orders only support FOK and FAK order types",
+        ));
     }
 
     Ok(())

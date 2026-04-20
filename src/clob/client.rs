@@ -65,12 +65,25 @@ fn validate_host_scheme(host: &Url, allow_insecure: bool) -> Result<()> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct CreateApiKeyResponse {
     #[serde(rename = "apiKey")]
     api_key: Option<String>,
     secret: Option<String>,
     passphrase: Option<String>,
+}
+
+impl std::fmt::Debug for CreateApiKeyResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateApiKeyResponse")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("secret", &self.secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl CreateApiKeyResponse {
@@ -206,12 +219,12 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
                 state,
                 host: inner.host.clone(),
                 client: inner.client.clone(),
-                tick_sizes: inner.tick_sizes.clone(),
-                neg_risk: inner.neg_risk.clone(),
-                fee_infos: inner.fee_infos.clone(),
-                fee_rate_bps: inner.fee_rate_bps.clone(),
-                token_condition_map: inner.token_condition_map.clone(),
-                builder_fee_rates: inner.builder_fee_rates.clone(),
+                tick_sizes: Arc::clone(&inner.tick_sizes),
+                neg_risk: Arc::clone(&inner.neg_risk),
+                fee_infos: Arc::clone(&inner.fee_infos),
+                fee_rate_bps: Arc::clone(&inner.fee_rate_bps),
+                token_condition_map: Arc::clone(&inner.token_condition_map),
+                builder_fee_rates: Arc::clone(&inner.builder_fee_rates),
                 funder: self.funder,
                 signature_type,
                 builder: inner.builder.clone(),
@@ -281,12 +294,12 @@ pub(crate) struct ClientInner<S: State> {
     state: S,
     host: Url,
     client: ReqwestClient,
-    tick_sizes: DashMap<U256, TickSize>,
-    neg_risk: DashMap<U256, bool>,
-    fee_infos: DashMap<U256, FeeInfo>,
-    fee_rate_bps: DashMap<U256, u32>,
-    token_condition_map: DashMap<U256, String>,
-    builder_fee_rates: DashMap<String, BuilderFeeRate>,
+    tick_sizes: Arc<DashMap<U256, TickSize>>,
+    neg_risk: Arc<DashMap<U256, bool>>,
+    fee_infos: Arc<DashMap<U256, FeeInfo>>,
+    fee_rate_bps: Arc<DashMap<U256, u32>>,
+    token_condition_map: Arc<DashMap<U256, String>>,
+    builder_fee_rates: Arc<DashMap<String, BuilderFeeRate>>,
     funder: Option<Address>,
     signature_type: SignatureTypeV2,
     builder: Option<BuilderConfig>,
@@ -463,15 +476,20 @@ impl<S: State> Client<S> {
         F: FnMut(Option<String>) -> Fut,
         Fut: Future<Output = Result<Page<T>>>,
     {
+        const MAX_PAGES: usize = 1000;
+
         let mut cursor = Some("MA==".to_owned());
         let mut items = Vec::new();
+        let mut pages = 0_usize;
 
         while cursor.as_deref() != Some("LTE=") {
+            pages += 1;
+            if pages > MAX_PAGES {
+                return Err(Error::validation("pagination exceeded maximum page limit"));
+            }
+
             let page = fetcher(cursor.clone()).await?;
             cursor = Some(page.next_cursor.clone());
-            if page.data.is_empty() {
-                break;
-            }
             items.extend(page.data);
         }
 
@@ -942,12 +960,12 @@ impl Client<Unauthenticated> {
                 client: ReqwestClient::builder()
                     .default_headers(default_headers)
                     .build()?,
-                tick_sizes: DashMap::new(),
-                neg_risk: DashMap::new(),
-                fee_infos: DashMap::new(),
-                fee_rate_bps: DashMap::new(),
-                token_condition_map: DashMap::new(),
-                builder_fee_rates: DashMap::new(),
+                tick_sizes: Arc::new(DashMap::new()),
+                neg_risk: Arc::new(DashMap::new()),
+                fee_infos: Arc::new(DashMap::new()),
+                fee_rate_bps: Arc::new(DashMap::new()),
+                token_condition_map: Arc::new(DashMap::new()),
+                builder_fee_rates: Arc::new(DashMap::new()),
                 funder: None,
                 signature_type: SignatureTypeV2::Eoa,
                 builder,
@@ -1970,5 +1988,21 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         version.assert_calls(1);
         assert_eq!(error.kind(), crate::Kind::Status);
+    }
+
+    #[test]
+    fn create_api_key_response_debug_redacts_credentials() {
+        let response = CreateApiKeyResponse {
+            api_key: Some("00000000-0000-0000-0000-000000000000".to_owned()),
+            secret: Some("super-secret".to_owned()),
+            passphrase: Some("super-passphrase".to_owned()),
+        };
+
+        let debug = format!("{response:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("00000000-0000-0000-0000-000000000000"));
+        assert!(!debug.contains("super-secret"));
+        assert!(!debug.contains("super-passphrase"));
     }
 }

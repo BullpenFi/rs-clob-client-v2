@@ -15,6 +15,24 @@ use crate::clob::types::TickSize;
 use crate::serde_helpers::deserialize_optional_decimal;
 use crate::types::Decimal;
 
+fn deserialize_decimal_from_any<'de, D>(deserializer: D) -> std::result::Result<Decimal, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let raw = match value {
+        serde_json::Value::String(value) => value,
+        serde_json::Value::Number(value) => value.to_string(),
+        other => {
+            return Err(D::Error::custom(format!(
+                "expected decimal as string or number, got {other}"
+            )));
+        }
+    };
+
+    raw.parse::<Decimal>().map_err(D::Error::custom)
+}
+
 fn deserialize_optional_u32_from_any<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<u32>, D::Error>
@@ -148,6 +166,20 @@ where
     }
 }
 
+fn serialize_decimal_as_number<S>(
+    value: &Decimal,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_f64(
+        value
+            .to_f64()
+            .ok_or_else(|| S::Error::custom("decimal cannot be represented as f64"))?,
+    )
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct MarketDetails {
@@ -181,8 +213,15 @@ pub struct MarketDetails {
 pub struct Token {
     pub token_id: String,
     pub outcome: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub price: Decimal,
-    #[serde(default)]
+    /// Included on some read payloads for compatibility, but omitted when
+    /// serializing back to TS-shaped JSON because upstream `Token` does not
+    /// declare this field.
+    #[serde(default, skip_serializing)]
     pub winner: bool,
 }
 
@@ -192,7 +231,15 @@ pub struct RewardsConfig {
     pub asset_address: String,
     pub start_date: String,
     pub end_date: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub rate_per_day: Decimal,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub total_rewards: Decimal,
 }
 
@@ -204,7 +251,15 @@ pub struct MarketReward {
     pub market_slug: String,
     pub event_slug: String,
     pub image: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub rewards_max_spread: Decimal,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub rewards_min_size: Decimal,
     #[builder(default)]
     #[serde(default)]
@@ -218,7 +273,15 @@ pub struct MarketReward {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct Earning {
     pub asset_address: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub earnings: Decimal,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub asset_rate: Decimal,
 }
 
@@ -230,8 +293,20 @@ pub struct UserRewardsEarning {
     pub market_slug: String,
     pub event_slug: String,
     pub image: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub rewards_max_spread: Decimal,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub rewards_min_size: Decimal,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub market_competitiveness: Decimal,
     #[builder(default)]
     #[serde(default)]
@@ -240,6 +315,10 @@ pub struct UserRewardsEarning {
     #[serde(default)]
     pub rewards_config: Vec<RewardsConfig>,
     pub maker_address: String,
+    #[serde(
+        deserialize_with = "deserialize_decimal_from_any",
+        serialize_with = "serialize_decimal_as_number"
+    )]
     pub earning_percentage: Decimal,
     #[builder(default)]
     #[serde(default)]
