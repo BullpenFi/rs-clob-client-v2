@@ -1,12 +1,17 @@
-use std::str::FromStr;
+#![allow(
+    clippy::print_stdout,
+    reason = "Examples intentionally print user-visible output"
+)]
+
+use std::str::FromStr as _;
 
 use alloy::primitives::U256;
 use alloy::signers::Signer as _;
-use polymarket_clob_client_v2::auth::PrivateKeySigner;
-use polymarket_clob_client_v2::clob::{Client, Config, UserOrder};
-use polymarket_clob_client_v2::clob::types::{OrderType, Side};
-use polymarket_clob_client_v2::types::Decimal;
 use polymarket_clob_client_v2::POLYGON;
+use polymarket_clob_client_v2::auth::PrivateKeySigner;
+use polymarket_clob_client_v2::clob::types::{OrderType, Side};
+use polymarket_clob_client_v2::clob::{Client, Config, UserOrder};
+use polymarket_clob_client_v2::types::Decimal;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

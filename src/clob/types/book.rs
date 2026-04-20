@@ -7,10 +7,10 @@ use serde_with::{DisplayFromStr, serde_as};
 // not for cryptographic security. Do not replace with SHA-256.
 use sha1::{Digest as _, Sha1};
 
+use crate::Result;
 use crate::clob::types::{Side, TickSize};
 use crate::serde_helpers::deserialize_tick_size;
 use crate::types::Decimal;
-use crate::Result;
 
 #[non_exhaustive]
 #[serde_as]

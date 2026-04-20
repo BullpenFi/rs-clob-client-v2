@@ -18,7 +18,7 @@ async fn configured_client(
 ) -> polymarket_clob_client_v2::clob::Client<
     polymarket_clob_client_v2::auth::state::Authenticated<polymarket_clob_client_v2::auth::Normal>,
 > {
-    let client = common::create_authenticated("https://clob.polymarket.com", config).await;
+    let client = common::create_authenticated(common::TEST_HOST, config).await;
     client.set_tick_size(token_id, tick_size);
     client.set_neg_risk(token_id, false);
     client
@@ -29,8 +29,16 @@ fn assert_scaled_amounts(
     maker_amount: &str,
     taker_amount: &str,
 ) {
-    assert_eq!(signable.order.makerAmount.to_string(), maker_amount);
-    assert_eq!(signable.order.takerAmount.to_string(), taker_amount);
+    assert_eq!(
+        signable.order.makerAmount.to_string(),
+        maker_amount,
+        "maker amount should match the expected raw on-chain scaling"
+    );
+    assert_eq!(
+        signable.order.takerAmount.to_string(),
+        taker_amount,
+        "taker amount should match the expected raw on-chain scaling"
+    );
 }
 
 #[tokio::test]
@@ -233,8 +241,7 @@ async fn rounding_cascade_triggers() {
 
 #[tokio::test]
 async fn builder_code_propagation() {
-    const BUILDER_CODE: &str =
-        "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     let token_id = U256::from(112_u64);
     let builder_code = B256::from_str(BUILDER_CODE).expect("builder code");

@@ -9,9 +9,9 @@ use dashmap::DashMap;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client as ReqwestClient, Method, Request};
 use rust_decimal::prelude::ToPrimitive as _;
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
@@ -26,12 +26,12 @@ use crate::clob::types::{
     DropNotificationsRequest, FeeInfo, FeeRateResponse, HeartbeatResponse, LastTradePriceRequest,
     LastTradePriceResponse, LastTradesPricesResponse, Market, MarketDetails, MarketPrice,
     MarketTradeEvent, MidpointRequest, MidpointResponse, MidpointsResponse, Notification,
-    OpenOrder, OpenOrdersRequest, OrderBookRequest, OrderBookSummary, OrderResponse, OrderType,
-    OrderMarketCancelRequest, Page,
-    PriceHistoryFilterParams, PriceRequest, PriceResponse, PricesResponse, ReadonlyApiKeyResponse,
-    RewardsPercentages, Side, SignatureTypeV2, SignableOrder, SignedOrder, SimplifiedMarket, SpreadRequest,
-    SpreadResponse, SpreadsResponse, TickSize, TickSizeResponse, Trade, TradeParams,
-    TradesPaginatedResponse, TotalUserEarning, UserEarning, UserRewardsEarning, sign_order as sign_v2_order,
+    OpenOrder, OpenOrdersRequest, OrderBookRequest, OrderBookSummary, OrderMarketCancelRequest,
+    OrderResponse, OrderType, Page, PriceHistoryFilterParams, PriceRequest, PriceResponse,
+    PricesResponse, ReadonlyApiKeyResponse, RewardsPercentages, Side, SignableOrder,
+    SignatureTypeV2, SignedOrder, SimplifiedMarket, SpreadRequest, SpreadResponse, SpreadsResponse,
+    TickSize, TickSizeResponse, TotalUserEarning, Trade, TradeParams, TradesPaginatedResponse,
+    UserEarning, UserRewardsEarning, sign_order as sign_v2_order,
 };
 use crate::config::exchange_contract;
 use crate::error::Error;
@@ -51,6 +51,43 @@ fn builder_fee_rate_from_bps(rate_bps: u32) -> f64 {
     (Decimal::from(rate_bps) / Decimal::from(10_000_u32))
         .to_f64()
         .unwrap_or_default()
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateApiKeyResponse {
+    #[serde(rename = "apiKey")]
+    api_key: Option<String>,
+    secret: Option<String>,
+    passphrase: Option<String>,
+}
+
+impl CreateApiKeyResponse {
+    fn into_credentials(self) -> Result<Credentials> {
+        let key = self
+            .api_key
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| Error::validation("create_api_key response missing apiKey"))?;
+        let secret = self
+            .secret
+            .ok_or_else(|| Error::validation("create_api_key response missing secret"))?;
+        let passphrase = self
+            .passphrase
+            .ok_or_else(|| Error::validation("create_api_key response missing passphrase"))?;
+
+        Ok(Credentials::new(
+            uuid::Uuid::from_str(&key).map_err(|error| {
+                Error::validation(format!(
+                    "create_api_key response returned invalid apiKey: {error}"
+                ))
+            })?,
+            secret,
+            passphrase,
+        ))
+    }
+
+    fn has_usable_key(&self) -> bool {
+        self.api_key.as_ref().is_some_and(|key| !key.is_empty())
+    }
 }
 
 pub struct AuthenticationBuilder<'signer, S: Signer, K: Kind = Normal> {
@@ -89,7 +126,10 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
     }
 
     #[must_use]
-    pub fn kind<NextKind: Kind>(self, kind: NextKind) -> AuthenticationBuilder<'signer, S, NextKind> {
+    pub fn kind<NextKind: Kind>(
+        self,
+        kind: NextKind,
+    ) -> AuthenticationBuilder<'signer, S, NextKind> {
         AuthenticationBuilder {
             client: self.client,
             signer: self.signer,
@@ -135,10 +175,14 @@ impl<'signer, S: Signer, K: Kind> AuthenticationBuilder<'signer, S, K> {
             Some(_) if self.nonce.is_some() => {
                 return Err(Error::validation(
                     "Credentials and nonce cannot be provided together",
-                ))
+                ));
             }
             Some(credentials) => credentials,
-            None => inner.create_or_derive_api_key(self.signer, self.nonce).await?,
+            None => {
+                inner
+                    .create_or_derive_api_key(self.signer, self.nonce)
+                    .await?
+            }
         };
 
         let state = Authenticated::new(self.signer.address(), credentials, self.kind);
@@ -263,18 +307,18 @@ impl<S: State> ClientInner<S> {
         if let Some(body) = body {
             request = request.json(body);
         }
-        crate::request(
-            &self.client,
-            request.build()?,
-            headers,
-            should_retry,
-        )
-        .await
+        crate::request(&self.client, request.build()?, headers, should_retry).await
     }
 
     async fn server_time(&self) -> Result<Timestamp> {
-        self.request_json(Method::GET, "/time", None, Option::<&()>::None, Option::<&()>::None)
-            .await
+        self.request_json(
+            Method::GET,
+            "/time",
+            None,
+            Option::<&()>::None,
+            Option::<&()>::None,
+        )
+        .await
     }
 
     async fn timestamp(&self) -> Result<Timestamp> {
@@ -300,8 +344,9 @@ impl ClientInner<Unauthenticated> {
         nonce: Option<u32>,
     ) -> Result<Credentials> {
         let headers = self.create_headers(signer, nonce).await?;
-        self.request_json(Method::POST, "/auth/api-key", Some(headers), Option::<&()>::None, Option::<&()>::None)
-            .await
+        self.create_api_key_response(headers)
+            .await?
+            .into_credentials()
     }
 
     async fn derive_api_key<S: Signer>(
@@ -325,10 +370,24 @@ impl ClientInner<Unauthenticated> {
         signer: &S,
         nonce: Option<u32>,
     ) -> Result<Credentials> {
-        match self.create_api_key(signer, nonce).await {
-            Ok(credentials) => Ok(credentials),
-            Err(_) => self.derive_api_key(signer, nonce).await,
+        let headers = self.create_headers(signer, nonce).await?;
+        let response = self.create_api_key_response(headers).await?;
+        if response.has_usable_key() {
+            response.into_credentials()
+        } else {
+            self.derive_api_key(signer, nonce).await
         }
+    }
+
+    async fn create_api_key_response(&self, headers: HeaderMap) -> Result<CreateApiKeyResponse> {
+        self.request_json(
+            Method::POST,
+            "/auth/api-key",
+            Some(headers),
+            Option::<&()>::None,
+            Option::<&()>::None,
+        )
+        .await
     }
 }
 
@@ -360,7 +419,9 @@ impl<S: State> Client<S> {
     }
 
     pub fn set_token_condition(&self, token_id: U256, condition_id: String) {
-        self.inner.token_condition_map.insert(token_id, condition_id);
+        self.inner
+            .token_condition_map
+            .insert(token_id, condition_id);
     }
 
     pub async fn server_time(&self) -> Result<Timestamp> {
@@ -392,18 +453,11 @@ impl<S: State> Client<S> {
         F: FnMut(Option<String>) -> Fut,
         Fut: Future<Output = Result<Page<T>>>,
     {
-        const MAX_PAGES: usize = 1000;
         let mut cursor = Some("MA==".to_owned());
         let mut items = Vec::new();
-        let mut pages = 0_usize;
 
         while cursor.as_deref() != Some("LTE=") {
-            if pages >= MAX_PAGES {
-                return Err(Error::validation("pagination exceeded maximum page limit"));
-            }
-
             let page = fetcher(cursor.clone()).await?;
-            pages += 1;
             cursor = Some(page.next_cursor.clone());
             if page.data.is_empty() {
                 break;
@@ -430,9 +484,7 @@ impl<S: State> Client<S> {
             .version
             .unwrap_or(2);
 
-        self.inner
-            .cached_version
-            .store(version, Ordering::Relaxed);
+        self.inner.cached_version.store(version, Ordering::Relaxed);
         Ok(version)
     }
 
@@ -488,7 +540,10 @@ impl<S: State> Client<S> {
 
     pub async fn clob_market_info(&self, condition_id: &str) -> Result<MarketDetails> {
         let details: MarketDetails = self
-            .get(&format!("/clob-markets/{condition_id}"), Option::<&()>::None)
+            .get(
+                &format!("/clob-markets/{condition_id}"),
+                Option::<&()>::None,
+            )
             .await?;
 
         for token in details.t.iter().flatten() {
@@ -496,7 +551,9 @@ impl<S: State> Client<S> {
                 self.inner
                     .token_condition_map
                     .insert(token_id, details.condition_id.clone());
-                self.inner.tick_sizes.insert(token_id, details.minimum_tick_size);
+                self.inner
+                    .tick_sizes
+                    .insert(token_id, details.minimum_tick_size.into());
                 self.inner.neg_risk.insert(token_id, details.neg_risk);
 
                 let fee_info = details.fee_details.as_ref().map_or(
@@ -517,8 +574,11 @@ impl<S: State> Client<S> {
     }
 
     pub async fn order_book(&self, token_id: U256) -> Result<OrderBookSummary> {
-        self.get("/book", Some(&OrderBookRequest::builder().token_id(token_id).build()))
-            .await
+        self.get(
+            "/book",
+            Some(&OrderBookRequest::builder().token_id(token_id).build()),
+        )
+        .await
     }
 
     pub async fn order_books(&self, requests: &[BookParams]) -> Result<Vec<OrderBookSummary>> {
@@ -632,7 +692,12 @@ impl<S: State> Client<S> {
     pub async fn price(&self, token_id: U256, side: Side) -> Result<PriceResponse> {
         self.get(
             "/price",
-            Some(&PriceRequest::builder().token_id(token_id).side(side).build()),
+            Some(
+                &PriceRequest::builder()
+                    .token_id(token_id)
+                    .side(side)
+                    .build(),
+            ),
         )
         .await
     }
@@ -722,10 +787,7 @@ impl<S: State> Client<S> {
             .ok_or_else(|| Error::validation("no match"))
     }
 
-    pub async fn market_trades_events(
-        &self,
-        condition_id: &str,
-    ) -> Result<Vec<MarketTradeEvent>> {
+    pub async fn market_trades_events(&self, condition_id: &str) -> Result<Vec<MarketTradeEvent>> {
         self.get(
             &format!("/markets/live-activity/{condition_id}"),
             Option::<&()>::None,
@@ -792,7 +854,7 @@ impl Client<Unauthenticated> {
         let mut default_headers = HeaderMap::new();
         default_headers.insert(
             "User-Agent",
-            HeaderValue::from_static("polymarket-clob-client-v2"),
+            HeaderValue::from_static("@polymarket/clob-client"),
         );
         default_headers.insert("Accept", HeaderValue::from_static("*/*"));
         default_headers.insert("Connection", HeaderValue::from_static("keep-alive"));
@@ -913,7 +975,10 @@ impl<K: Kind> Client<Authenticated<K>> {
         Body: Serialize,
     {
         let should_retry = self.inner.config.retry_on_error && method == Method::POST;
-        let mut request = self.inner.client.request(method, self.inner.endpoint(path)?);
+        let mut request = self
+            .inner
+            .client
+            .request(method, self.inner.endpoint(path)?);
         if let Some(query) = query {
             request = request.query(query);
         }
@@ -922,13 +987,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         }
         let request = request.build()?;
         let headers = self.create_headers(&request).await?;
-        crate::request(
-            &self.inner.client,
-            request,
-            Some(headers),
-            should_retry,
-        )
-        .await
+        crate::request(&self.inner.client, request, Some(headers), should_retry).await
     }
 
     async fn auth_get<Response, Query>(&self, path: &str, query: Option<&Query>) -> Result<Response>
@@ -1043,7 +1102,8 @@ impl<K: Kind> Client<Authenticated<K>> {
     }
 
     pub async fn open_orders(&self, request: &OpenOrdersRequest) -> Result<Vec<OpenOrder>> {
-        self.collect_pages(|cursor| self.orders_page(request, cursor)).await
+        self.collect_pages(|cursor| self.orders_page(request, cursor))
+            .await
     }
 
     pub async fn orders(
@@ -1061,8 +1121,13 @@ impl<K: Kind> Client<Authenticated<K>> {
         }
 
         self.collect_pages(|cursor| async move {
-            self.auth_get("/data/pre-migration-orders", Some(&Query { next_cursor: cursor }))
-                .await
+            self.auth_get(
+                "/data/pre-migration-orders",
+                Some(&Query {
+                    next_cursor: cursor,
+                }),
+            )
+            .await
         })
         .await
     }
@@ -1165,12 +1230,16 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.auth_get("/balance-allowance", Some(&query)).await
     }
 
-    pub async fn update_balance_allowance(&self, request: &BalanceAllowanceRequest) -> Result<Value> {
+    pub async fn update_balance_allowance(
+        &self,
+        request: &BalanceAllowanceRequest,
+    ) -> Result<Value> {
         let mut query = request.clone();
         if query.signature_type.is_none() {
             query.signature_type = Some(self.signature_type());
         }
-        self.auth_get("/balance-allowance/update", Some(&query)).await
+        self.auth_get("/balance-allowance/update", Some(&query))
+            .await
     }
 
     #[must_use]
@@ -1194,8 +1263,8 @@ impl<K: Kind> Client<Authenticated<K>> {
         let neg_risk = self.neg_risk(signable_order.order.tokenId).await?;
         let verifying_contract = exchange_contract(chain_id, neg_risk)
             .ok_or_else(|| Error::missing_contract_config(chain_id, neg_risk))?;
-        let signature = sign_v2_order(signer, &signable_order.order, chain_id, verifying_contract)
-            .await?;
+        let signature =
+            sign_v2_order(signer, &signable_order.order, chain_id, verifying_contract).await?;
 
         Ok(SignedOrder {
             order: signable_order.order,
@@ -1342,11 +1411,13 @@ impl<K: Kind> Client<Authenticated<K>> {
     }
 
     pub async fn post_order(&self, order: &SignedOrder) -> Result<OrderResponse> {
-        self.auth_post("/order", &build_post_order_payload(order)?).await
+        self.auth_post("/order", &build_post_order_payload(order)?)
+            .await
     }
 
     async fn post_order_value(&self, order: &SignedOrder) -> Result<Value> {
-        self.auth_post("/order", &build_post_order_payload(order)?).await
+        self.auth_post("/order", &build_post_order_payload(order)?)
+            .await
     }
 
     pub async fn post_orders(&self, orders: &[SignedOrder]) -> Result<Vec<OrderResponse>> {
@@ -1383,10 +1454,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.cancel_all_orders().await
     }
 
-    pub async fn cancel_market_orders(
-        &self,
-        request: &OrderMarketCancelRequest,
-    ) -> Result<Value> {
+    pub async fn cancel_market_orders(&self, request: &OrderMarketCancelRequest) -> Result<Value> {
         self.auth_delete("/cancel-market-orders", Option::<&()>::None, Some(request))
             .await
     }
@@ -1430,8 +1498,12 @@ impl<K: Kind> Client<Authenticated<K>> {
     }
 
     pub async fn revoke_builder_api_key(&self) -> Result<Value> {
-        self.auth_delete("/auth/builder-api-key", Option::<&()>::None, Option::<&()>::None)
-            .await
+        self.auth_delete(
+            "/auth/builder-api-key",
+            Option::<&()>::None,
+            Option::<&()>::None,
+        )
+        .await
     }
 
     pub async fn builder_trades(
@@ -1475,16 +1547,23 @@ impl<K: Kind> Client<Authenticated<K>> {
         })
     }
 
-    pub async fn order_scoring(&self, order_id: String) -> Result<crate::clob::types::OrderScoringResponse> {
+    pub async fn order_scoring(
+        &self,
+        order_id: String,
+    ) -> Result<crate::clob::types::OrderScoringResponse> {
         #[derive(Serialize)]
         struct Query {
             order_id: String,
         }
 
-        self.auth_get("/order-scoring", Some(&Query { order_id })).await
+        self.auth_get("/order-scoring", Some(&Query { order_id }))
+            .await
     }
 
-    pub async fn orders_scoring(&self, order_ids: &[String]) -> Result<crate::clob::types::OrdersScoringResponse> {
+    pub async fn orders_scoring(
+        &self,
+        order_ids: &[String],
+    ) -> Result<crate::clob::types::OrdersScoringResponse> {
         self.auth_post("/orders-scoring", &order_ids.to_vec()).await
     }
 
@@ -1586,8 +1665,13 @@ impl<K: Kind> Client<Authenticated<K>> {
         }
 
         self.collect_pages(|cursor| async {
-            self.get("/rewards/markets/current", Some(&Query { next_cursor: cursor }))
-                .await
+            self.get(
+                "/rewards/markets/current",
+                Some(&Query {
+                    next_cursor: cursor,
+                }),
+            )
+            .await
         })
         .await
     }
@@ -1604,7 +1688,9 @@ impl<K: Kind> Client<Authenticated<K>> {
         self.collect_pages(|cursor| async {
             self.get(
                 &format!("/rewards/markets/{condition_id}"),
-                Some(&Query { next_cursor: cursor }),
+                Some(&Query {
+                    next_cursor: cursor,
+                }),
             )
             .await
         })
@@ -1688,7 +1774,7 @@ fn build_post_order_payload(order: &SignedOrder) -> Result<PostOrderPayload> {
                 other => {
                     return Err(Error::validation(format!(
                         "invalid signature type on order: {other}"
-                    )))
+                    )));
                 }
             },
             timestamp: order.order.timestamp.to_string(),
@@ -1735,7 +1821,6 @@ mod tests {
 
     use super::*;
     use crate::auth::{Credentials, PrivateKeySigner};
-    use crate::error::Kind as ErrorKind;
 
     fn signer() -> PrivateKeySigner {
         PrivateKeySigner::from_str(
@@ -1750,37 +1835,16 @@ mod tests {
             &server.base_url(),
             Config::builder().allow_insecure(true).build(),
         )
-            .expect("client")
-            .authentication_builder(&signer())
-            .credentials(Credentials::new(
-                Uuid::nil(),
-                "c2VjcmV0".to_owned(),
-                "passphrase".to_owned(),
-            ))
-            .authenticate()
-            .await
-            .expect("authenticated client")
-    }
-
-    #[tokio::test]
-    async fn collect_pages_errors_when_cursor_never_terminates() {
-        let client = Client::new("https://clob.polymarket.com", Config::default())
-            .expect("client");
-
-        let error = client
-            .collect_pages(|_| async {
-                Ok(Page {
-                    limit: 1,
-                    count: 1,
-                    next_cursor: "MA==".to_owned(),
-                    data: vec![1_u32],
-                })
-            })
-            .await
-            .expect_err("pagination should fail");
-
-        assert_eq!(error.kind(), ErrorKind::Validation);
-        assert!(error.to_string().contains("pagination exceeded maximum page limit"));
+        .expect("client")
+        .authentication_builder(&signer())
+        .credentials(Credentials::new(
+            Uuid::nil(),
+            "c2VjcmV0".to_owned(),
+            "passphrase".to_owned(),
+        ))
+        .authenticate()
+        .await
+        .expect("authenticated client")
     }
 
     #[tokio::test]

@@ -11,9 +11,9 @@ use alloy::primitives::{Address, B256, ChainId, Signature, U256};
 use alloy::signers::Signer;
 use alloy::sol_types::SolStruct as _;
 
+use crate::Result;
 use crate::auth::ApiKey;
 use crate::clob::types::{OrderType, SignatureTypeV2};
-use crate::Result;
 
 pub const CTF_EXCHANGE_V2_DOMAIN_NAME: &str = "Polymarket CTF Exchange";
 pub const CTF_EXCHANGE_V2_DOMAIN_VERSION: &str = "2";

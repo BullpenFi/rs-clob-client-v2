@@ -3,13 +3,103 @@
     reason = "Market-prefixed API models intentionally mirror Polymarket's schema names"
 )]
 
+use std::str::FromStr as _;
+
 use bon::Builder;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
 
 use crate::clob::types::TickSize;
-use crate::serde_helpers::{StringFromAny, deserialize_optional_decimal, deserialize_tick_size};
+use crate::serde_helpers::deserialize_optional_decimal;
 use crate::types::Decimal;
+
+fn deserialize_optional_u32_from_any<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    match value {
+        serde_json::Value::String(value) => {
+            value.parse::<u32>().map(Some).map_err(D::Error::custom)
+        }
+        serde_json::Value::Number(value) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| D::Error::custom("expected u32-compatible number"))
+            .map(Some),
+        other => Err(D::Error::custom(format!(
+            "expected optional u32 as string or number, got {other}"
+        ))),
+    }
+}
+
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "NumericTickSize is a fixed API-compatibility wrapper around Polymarket's shorthand market tick size"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumericTickSize(pub TickSize);
+
+impl NumericTickSize {
+    #[must_use]
+    pub fn tick_size(self) -> TickSize {
+        self.0
+    }
+}
+
+impl From<NumericTickSize> for TickSize {
+    fn from(value: NumericTickSize) -> Self {
+        value.0
+    }
+}
+
+impl From<TickSize> for NumericTickSize {
+    fn from(value: TickSize) -> Self {
+        Self(value)
+    }
+}
+
+impl Serialize for NumericTickSize {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let numeric = match self.0 {
+            TickSize::Tenth => 0.1_f64,
+            TickSize::Hundredth => 0.01_f64,
+            TickSize::Thousandth => 0.001_f64,
+            TickSize::TenThousandth => 0.0001_f64,
+        };
+
+        serializer.serialize_f64(numeric)
+    }
+}
+
+impl<'de> Deserialize<'de> for NumericTickSize {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw = match value {
+            serde_json::Value::String(value) => value,
+            serde_json::Value::Number(value) => value.to_string(),
+            other => {
+                return Err(D::Error::custom(format!(
+                    "expected tick size as string or number, got {other}"
+                )));
+            }
+        };
+
+        TickSize::from_str(&raw).map(Self).map_err(D::Error::custom)
+    }
+}
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq, Eq)]
@@ -32,26 +122,31 @@ pub struct FeeDetails {
 }
 
 #[non_exhaustive]
-#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, PartialEq)]
 pub struct MarketDetails {
     #[serde(rename = "c")]
     pub condition_id: String,
     #[builder(default)]
     #[serde(default)]
-    pub t: Vec<Option<ClobToken>>,
-    #[serde(rename = "mts", deserialize_with = "deserialize_tick_size")]
-    pub minimum_tick_size: TickSize,
+    pub t: [Option<ClobToken>; 2],
+    #[serde(rename = "mts")]
+    pub minimum_tick_size: NumericTickSize,
     #[serde(rename = "nr")]
     pub neg_risk: bool,
     #[serde(rename = "fd")]
     pub fee_details: Option<FeeDetails>,
-    #[serde_as(as = "Option<StringFromAny>")]
-    #[serde(rename = "mbf", default)]
-    pub maker_base_fee: Option<String>,
-    #[serde_as(as = "Option<StringFromAny>")]
-    #[serde(rename = "tbf", default)]
-    pub taker_base_fee: Option<String>,
+    #[serde(
+        rename = "mbf",
+        default,
+        deserialize_with = "deserialize_optional_u32_from_any"
+    )]
+    pub maker_base_fee: Option<u32>,
+    #[serde(
+        rename = "tbf",
+        default,
+        deserialize_with = "deserialize_optional_u32_from_any"
+    )]
+    pub taker_base_fee: Option<u32>,
 }
 
 #[non_exhaustive]

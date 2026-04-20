@@ -14,8 +14,8 @@ use std::fmt::Write as _;
 
 use alloy::primitives::ChainId;
 use reqwest::{Request, header::HeaderMap};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::time::{Duration, sleep};
 
@@ -50,6 +50,17 @@ pub trait ToQueryParams: Serialize {
 
 impl<T: Serialize> ToQueryParams for T {}
 
+fn status_message(body: &Value) -> String {
+    match body.get("error") {
+        Some(Value::String(message)) => message.clone(),
+        Some(error) => error.to_string(),
+        None => match body {
+            Value::String(message) => message.clone(),
+            other => other.to_string(),
+        },
+    }
+}
+
 pub(crate) async fn request<Response: DeserializeOwned>(
     client: &reqwest::Client,
     mut request: Request,
@@ -82,8 +93,19 @@ pub(crate) async fn request<Response: DeserializeOwned>(
                         continue;
                     }
 
-                    let message = response.text().await.unwrap_or_default();
-                    return Err(Error::status(status, method, path, message));
+                    let raw_body = response.text().await.unwrap_or_default();
+                    let body = serde_json::from_str::<Value>(&raw_body).ok();
+                    let message = body
+                        .as_ref()
+                        .map_or_else(|| raw_body.clone(), status_message);
+                    return Err(Error::status_with_payload(
+                        status,
+                        method.clone(),
+                        path.clone(),
+                        message,
+                        body,
+                        (!raw_body.is_empty()).then_some(raw_body),
+                    ));
                 }
 
                 let text = response.text().await?;
@@ -96,10 +118,9 @@ pub(crate) async fn request<Response: DeserializeOwned>(
                 return crate::serde_helpers::deserialize_with_warnings(value);
             }
             Err(error) => {
-                let should_retry =
-                    attempt == 0
-                        && retry_request.is_some()
-                        && (error.is_connect() || error.is_timeout() || error.is_request());
+                let should_retry = attempt == 0
+                    && retry_request.is_some()
+                    && (error.is_connect() || error.is_timeout());
                 if should_retry {
                     sleep(Duration::from_millis(30)).await;
                     request = retry_request

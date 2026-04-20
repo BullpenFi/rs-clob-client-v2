@@ -10,7 +10,7 @@ use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Credentials;
-use crate::clob::types::{TickSize, trade::Trade, trade::BuilderTrade, trade::Notification};
+use crate::clob::types::{TickSize, trade::BuilderTrade, trade::Notification, trade::Trade};
 use crate::serde_helpers::deserialize_tick_size;
 use crate::types::Decimal;
 
@@ -71,10 +71,7 @@ pub struct BanStatus {
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(bound(
-    serialize = "T: Serialize",
-    deserialize = "T: serde::Deserialize<'de>"
-))]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::Deserialize<'de>"))]
 pub struct Page<T> {
     pub limit: u32,
     pub count: u32,

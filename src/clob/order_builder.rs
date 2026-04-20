@@ -8,22 +8,21 @@ use futures::future::BoxFuture;
 use rand::random;
 use rust_decimal::RoundingStrategy::{AwayFromZero, MidpointAwayFromZero, ToZero};
 
+use crate::Result;
 use crate::auth::Kind as AuthKind;
-use crate::auth::state::Authenticated;
 use crate::auth::Signer;
+use crate::auth::state::Authenticated;
 use crate::clob::Client;
 use crate::clob::types::{OrderType, Side, SignableOrder, SignatureTypeV2, new_order};
 use crate::error::Error;
 use crate::types::Address;
 use crate::types::Decimal;
-use crate::Result;
 
 pub const USDC_DECIMALS: u32 = 6;
 pub const LOT_SIZE_SCALE: u32 = 2;
 
 pub type DynSigner = Box<dyn Signer + Send + Sync>;
-pub type SignerFactory =
-    Arc<dyn Fn() -> BoxFuture<'static, Result<DynSigner>> + Send + Sync>;
+pub type SignerFactory = Arc<dyn Fn() -> BoxFuture<'static, Result<DynSigner>> + Send + Sync>;
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -372,16 +371,19 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         let post_only = self.post_only.unwrap_or(false);
         let defer_exec = self.defer_exec.unwrap_or(false);
         if post_only {
-            return Err(Error::validation("post_only is not supported for market orders"));
+            return Err(Error::validation(
+                "post_only is not supported for market orders",
+            ));
         }
 
         let tick_size = self.client.tick_size(token_id).await?;
         let price = match self.price {
             Some(price) => price,
-            None => self
-                .client
-                .calculate_market_price(token_id, side, amount, order_type)
-                .await?,
+            None => {
+                self.client
+                    .calculate_market_price(token_id, side, amount, order_type)
+                    .await?
+            }
         };
 
         validate_price(price)?;
@@ -391,7 +393,8 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
                 Some(user_usdc_balance) => {
                     let builder_taker_fee_rate = match self.builder_code {
                         Some(builder_code) if builder_code != B256::ZERO => {
-                            let fee_response = self.client.builder_fees(&builder_code.to_string()).await?;
+                            let fee_response =
+                                self.client.builder_fees(&builder_code.to_string()).await?;
                             Decimal::from(fee_response.builder_taker_fee_rate_bps)
                                 / Decimal::from(10_000_u32)
                         }

@@ -47,8 +47,7 @@ impl PartialEq for BuilderApiKey {
     }
 }
 
-impl Eq for BuilderApiKey {
-}
+impl Eq for BuilderApiKey {}
 
 #[cfg(test)]
 mod tests {

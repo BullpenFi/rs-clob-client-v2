@@ -5,14 +5,14 @@ use std::str::FromStr as _;
 use alloy::primitives::U256;
 use httpmock::Method::GET;
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::{Config, UserMarketOrder};
 use polymarket_clob_client_v2::clob::types::{BuilderConfig, FeeInfo, Side, TickSize};
+use polymarket_clob_client_v2::clob::{Config, UserMarketOrder};
 use polymarket_clob_client_v2::types::Decimal;
 
 #[tokio::test]
 async fn limit_order_builder_matches_v2_amount_rules() {
     let signer = common::signer();
-    let client = common::create_authenticated("https://clob.polymarket.com", Config::default()).await;
+    let client = common::create_authenticated(common::TEST_HOST, Config::default()).await;
 
     let token_id = U256::from(123_u64);
     client.set_tick_size(token_id, TickSize::Hundredth);
@@ -37,7 +37,7 @@ async fn limit_order_builder_matches_v2_amount_rules() {
 
 #[tokio::test]
 async fn limit_order_builder_rejects_price_decimal_places_smaller_than_tick_size() {
-    let client = common::create_authenticated("https://clob.polymarket.com", Config::default()).await;
+    let client = common::create_authenticated(common::TEST_HOST, Config::default()).await;
 
     let token_id = U256::from(124_u64);
     client.set_tick_size(token_id, TickSize::Hundredth);
@@ -53,15 +53,16 @@ async fn limit_order_builder_rejects_price_decimal_places_smaller_than_tick_size
         .await
         .expect_err("price precision should fail");
 
-    assert!(error
-        .to_string()
-        .contains("price has too many decimal places for tick size"));
+    assert!(
+        error
+            .to_string()
+            .contains("price has too many decimal places for tick size")
+    );
 }
 
 #[tokio::test]
 async fn create_market_order_adjusts_buy_amount_for_builder_fees() {
-    const BUILDER_CODE: &str =
-        "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     let server = MockServer::start();
     let builder_fee_mock = server.mock(|when, then| {
@@ -89,10 +90,7 @@ async fn create_market_order_adjusts_buy_amount_for_builder_fees() {
     client.set_neg_risk(token_id, false);
     client.set_fee_info(
         token_id,
-        FeeInfo::builder()
-            .rate(Decimal::ZERO)
-            .exponent(0)
-            .build(),
+        FeeInfo::builder().rate(Decimal::ZERO).exponent(0).build(),
     );
 
     let signed = client

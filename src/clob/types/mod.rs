@@ -15,15 +15,14 @@ pub use builder::{
     BuilderApiKey, BuilderApiKeyResponse, BuilderConfig, BuilderFeeRate, ReadonlyApiKeyResponse,
 };
 pub use enums::{
-    AssetType, Chain, OrderType, PriceHistoryInterval, RoundConfig, Side, SignatureTypeV2,
-    TickSize,
+    AssetType, Chain, OrderType, PriceHistoryInterval, RoundConfig, Side, SignatureTypeV2, TickSize,
 };
 pub use market::{
-    ClobToken, Earning, FeeDetails, Market, MarketDetails, MarketReward, RewardsConfig,
-    SimplifiedMarket, Token, UserRewardsEarning,
+    ClobToken, Earning, FeeDetails, Market, MarketDetails, MarketReward, NumericTickSize,
+    RewardsConfig, SimplifiedMarket, Token, UserRewardsEarning,
 };
 pub use order::{
-    Order, SignedOrder, SignableOrder, new_order, sign_order, signing_domain, signing_hash,
+    Order, SignableOrder, SignedOrder, new_order, sign_order, signing_domain, signing_hash,
 };
 pub use request::{
     BalanceAllowanceRequest, BookParams, BuilderTradeParams, DropNotificationsRequest,
@@ -32,10 +31,11 @@ pub use request::{
     PriceRequest, SpreadRequest, TradeParams, UserRewardsEarningRequest,
 };
 pub use response::{
-    ApiKeysResponse, BalanceAllowanceResponse, BanStatus, BuilderFeesResponse, BuilderTradesResponse,
-    ErrorResponse, FeeInfo, FeeRateResponse, HeartbeatResponse, MarketPrice, NegRiskResponse,
-    NotificationsResponse, OpenOrder, OrderResponse, OrderScoringResponse, OrdersScoringResponse,
-    Page, RewardsPercentages, TickSizeResponse, TradesPaginatedResponse, VersionResponse,
+    ApiKeysResponse, BalanceAllowanceResponse, BanStatus, BuilderFeesResponse,
+    BuilderTradesResponse, ErrorResponse, FeeInfo, FeeRateResponse, HeartbeatResponse, MarketPrice,
+    NegRiskResponse, NotificationsResponse, OpenOrder, OrderResponse, OrderScoringResponse,
+    OrdersScoringResponse, Page, RewardsPercentages, TickSizeResponse, TradesPaginatedResponse,
+    VersionResponse,
 };
 pub use trade::{
     BuilderTrade, MakerOrder, MarketTradeEvent, MarketTradeEventMarket, MarketTradeEventUser,

@@ -5,8 +5,8 @@ use std::str::FromStr as _;
 use alloy::primitives::U256;
 use httpmock::Method::GET;
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::{Config, UserMarketOrder};
 use polymarket_clob_client_v2::clob::types::{BuilderConfig, FeeInfo, Side, TickSize};
+use polymarket_clob_client_v2::clob::{Config, UserMarketOrder};
 use polymarket_clob_client_v2::types::Decimal;
 
 fn dec(value: &str) -> Decimal {
@@ -76,8 +76,7 @@ fn platform_fee_at_price_0_99() {
 
 #[tokio::test]
 async fn builder_fee_conversion_bps() {
-    const BUILDER_CODE: &str =
-        "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     let server = MockServer::start();
     let builder_fee_mock = server.mock(|when, then| {
@@ -125,7 +124,7 @@ async fn adjust_buy_amount_no_adjustment() {
     let token_id = U256::from(302_u64);
     let signer = common::signer();
     let client = configured_client(
-        "https://clob.polymarket.com",
+        common::TEST_HOST,
         Config::default(),
         token_id,
         dec("0.02"),
@@ -153,8 +152,7 @@ async fn adjust_buy_amount_no_adjustment() {
 
 #[tokio::test]
 async fn adjust_buy_amount_with_adjustment() {
-    const BUILDER_CODE: &str =
-        "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const BUILDER_CODE: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     let server = MockServer::start();
     let builder_fee_mock = server.mock(|when, then| {
@@ -202,7 +200,7 @@ async fn adjust_buy_amount_zero_builder_fee() {
     let token_id = U256::from(304_u64);
     let signer = common::signer();
     let client = configured_client(
-        "https://clob.polymarket.com",
+        common::TEST_HOST,
         Config::default(),
         token_id,
         dec("0.02"),

@@ -49,7 +49,7 @@ fn market_details_shorthand_fields() {
     let details: MarketDetails = serde_json::from_str(
         r#"{
             "c": "condition-1",
-            "t": [{ "t": "123", "o": "YES" }],
+            "t": [{ "t": "123", "o": "YES" }, null],
             "mts": 0.01,
             "nr": false,
             "fd": { "r": "0.02", "e": 1, "to": true },
@@ -60,13 +60,30 @@ fn market_details_shorthand_fields() {
     .expect("market details");
 
     assert_eq!(details.condition_id, "condition-1");
-    assert_eq!(details.minimum_tick_size, TickSize::Hundredth);
+    assert_eq!(details.minimum_tick_size.tick_size(), TickSize::Hundredth);
     assert!(!details.neg_risk);
-    assert_eq!(details.t.len(), 1);
     assert_eq!(details.t[0].as_ref().expect("token").token_id, "123");
-    assert_eq!(details.fee_details.as_ref().expect("fee details").rate, Some(dec("0.02")));
-    assert_eq!(details.maker_base_fee.as_deref(), Some("1"));
-    assert_eq!(details.taker_base_fee.as_deref(), Some("2"));
+    assert!(details.t[1].is_none());
+    assert_eq!(
+        details.fee_details.as_ref().expect("fee details").rate,
+        Some(dec("0.02"))
+    );
+    assert_eq!(details.maker_base_fee, Some(1));
+    assert_eq!(details.taker_base_fee, Some(2));
+
+    let value = serde_json::to_value(&details).expect("serialize market details");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "c": "condition-1",
+            "t": [{ "t": "123", "o": "YES" }, null],
+            "mts": 0.01,
+            "nr": false,
+            "fd": { "r": "0.02", "e": 1, "to": true },
+            "mbf": 1,
+            "tbf": 2
+        })
+    );
 }
 
 #[test]

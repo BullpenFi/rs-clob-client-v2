@@ -4,14 +4,17 @@ use std::str::FromStr as _;
 
 use alloy::hex::ToHexExt as _;
 use alloy::primitives::{B256, U256, address};
-use polymarket_clob_client_v2::auth::state::Authenticated;
+use httpmock::Method::{GET, POST};
+use httpmock::MockServer;
 use polymarket_clob_client_v2::auth::builder;
+use polymarket_clob_client_v2::auth::state::Authenticated;
 use polymarket_clob_client_v2::auth::{Credentials, Normal, PrivateKeySigner, Signer as _, l1, l2};
-use polymarket_clob_client_v2::clob::types::{Side, SignatureTypeV2, sign_order, signing_hash};
 use polymarket_clob_client_v2::clob::types::{Order, new_order};
+use polymarket_clob_client_v2::clob::types::{Side, SignatureTypeV2, sign_order, signing_hash};
+use polymarket_clob_client_v2::clob::{Client, Config};
 use polymarket_clob_client_v2::{AMOY, POLYGON, config};
-use reqwest::header::HeaderValue;
 use reqwest::Method;
+use reqwest::header::HeaderValue;
 use uuid::Uuid;
 
 fn sample_order() -> Order {
@@ -93,11 +96,7 @@ async fn l1_headers_match_ts_amoy_vector() {
 #[tokio::test]
 async fn creates_l2_headers() {
     let signer = common::signer();
-    let state = Authenticated::new(
-        signer.address(),
-        common::credentials(),
-        Normal::new(),
-    );
+    let state = Authenticated::new(signer.address(), common::credentials(), Normal::new());
 
     let request = reqwest::Client::new()
         .get("https://example.com/data/orders")
@@ -110,7 +109,9 @@ async fn creates_l2_headers() {
 
     assert_eq!(
         headers.get(l2::POLY_API_KEY),
-        Some(&HeaderValue::from_static("00000000-0000-0000-0000-000000000000"))
+        Some(&HeaderValue::from_static(
+            "00000000-0000-0000-0000-000000000000"
+        ))
     );
     assert_eq!(
         headers.get(l2::POLY_PASSPHRASE),
@@ -196,8 +197,7 @@ async fn l2_headers_with_body_match_expected_signature() {
 async fn order_signing_round_trip_recovers_signer() {
     let signer = common::signer();
     let order = sample_order();
-    let verifying_contract =
-        config::exchange_contract(POLYGON, false).expect("exchange contract");
+    let verifying_contract = config::exchange_contract(POLYGON, false).expect("exchange contract");
 
     let hash = signing_hash(&order, POLYGON, verifying_contract);
     let signature = sign_order(&signer, &order, POLYGON, verifying_contract)
@@ -206,17 +206,84 @@ async fn order_signing_round_trip_recovers_signer() {
 
     assert_ne!(hash, B256::ZERO);
     assert_eq!(
-        signature.recover_address_from_prehash(&hash).expect("recover"),
+        signature
+            .recover_address_from_prehash(&hash)
+            .expect("recover"),
         signer.address()
     );
 }
 
 #[test]
 fn remote_builder_config_debug_redacts_bearer_token() {
-    let config = builder::Config::remote("https://example.com/sign", Some("super-secret-token".to_owned()))
-        .expect("remote builder config");
+    let config = builder::Config::remote(
+        "https://example.com/sign",
+        Some("super-secret-token".to_owned()),
+    )
+    .expect("remote builder config");
 
     let debug = format!("{config:?}");
     assert!(debug.contains("[REDACTED]"));
     assert!(!debug.contains("super-secret-token"));
+}
+
+#[test]
+fn remote_builder_config_rejects_http_hosts_by_default() {
+    let error = builder::Config::remote("http://example.com/sign", None)
+        .expect_err("http should be rejected");
+
+    assert!(error.to_string().contains(
+        "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev"
+    ));
+}
+
+#[tokio::test]
+async fn remote_builder_headers_support_explicit_insecure_local_dev_hosts() {
+    let signer_server = MockServer::start();
+    let api_server = MockServer::start();
+
+    let sign_mock = signer_server.mock(|when, then| {
+        when.method(POST)
+            .path("/sign")
+            .header("authorization", "Bearer builder-token");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "POLY_BUILDER_API_KEY": "builder-key",
+            "POLY_BUILDER_TIMESTAMP": "1700000000",
+            "POLY_BUILDER_PASSPHRASE": "builder-passphrase",
+            "POLY_BUILDER_SIGNATURE": "builder-signature"
+        }));
+    });
+    let api_mock = api_server.mock(|when, then| {
+        when.method(GET)
+            .path("/auth/api-keys")
+            .header("POLY_BUILDER_API_KEY", "builder-key")
+            .header("POLY_BUILDER_PASSPHRASE", "builder-passphrase")
+            .header("POLY_BUILDER_SIGNATURE", "builder-signature")
+            .header("POLY_BUILDER_TIMESTAMP", "1700000000");
+        then.status(200)
+            .json_body_obj(&serde_json::json!({ "apiKeys": [] }));
+    });
+
+    let client = Client::new(
+        &api_server.base_url(),
+        Config::builder().allow_insecure(true).build(),
+    )
+    .expect("client")
+    .authentication_builder(&common::signer())
+    .credentials(common::credentials())
+    .kind(builder::Builder::new(
+        builder::Config::remote_insecure(
+            &format!("{}/sign", signer_server.base_url()),
+            Some("builder-token".to_owned()),
+        )
+        .expect("remote builder config"),
+    ))
+    .authenticate()
+    .await
+    .expect("authenticated client");
+
+    let response = client.api_keys().await.expect("api keys");
+
+    sign_mock.assert();
+    api_mock.assert();
+    assert!(response.api_keys.is_empty());
 }

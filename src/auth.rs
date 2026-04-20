@@ -204,7 +204,10 @@ pub mod l1 {
         let signature = signer.sign_hash(&hash).await?;
 
         let mut map = HeaderMap::new();
-        map.insert(POLY_ADDRESS, signer.address().encode_hex_with_prefix().parse()?);
+        map.insert(
+            POLY_ADDRESS,
+            signer.address().encode_hex_with_prefix().parse()?,
+        );
         map.insert(POLY_NONCE, nonce.to_string().parse()?);
         map.insert(POLY_SIGNATURE, signature.to_string().parse()?);
         map.insert(POLY_TIMESTAMP, timestamp.to_string().parse()?);
@@ -237,7 +240,10 @@ pub mod l2 {
         let signature = hmac(&state.credentials.secret, &to_message(request, timestamp)?)?;
 
         let mut map = HeaderMap::new();
-        map.insert(POLY_ADDRESS, state.address.encode_hex_with_prefix().parse()?);
+        map.insert(
+            POLY_ADDRESS,
+            state.address.encode_hex_with_prefix().parse()?,
+        );
         map.insert(POLY_API_KEY, state.credentials.key.to_string().parse()?);
         map.insert(
             POLY_PASSPHRASE,
@@ -288,6 +294,7 @@ pub mod builder {
         Remote {
             host: Url,
             token: Option<SecretString>,
+            allow_insecure: bool,
         },
     }
 
@@ -298,9 +305,25 @@ pub mod builder {
         }
 
         pub fn remote(host: &str, token: Option<String>) -> Result<Self> {
+            let host = Url::parse(host)?;
+            if host.scheme() != "https" {
+                return Err(crate::Error::validation(
+                    "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev",
+                ));
+            }
+
+            Ok(Self::Remote {
+                host,
+                token: token.map(SecretString::from),
+                allow_insecure: false,
+            })
+        }
+
+        pub fn remote_insecure(host: &str, token: Option<String>) -> Result<Self> {
             Ok(Self::Remote {
                 host: Url::parse(host)?,
                 token: token.map(SecretString::from),
+                allow_insecure: true,
             })
         }
     }
@@ -309,10 +332,15 @@ pub mod builder {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::Local(_) => f.debug_tuple("Local").field(&"[REDACTED]").finish(),
-                Self::Remote { host, token } => f
+                Self::Remote {
+                    host,
+                    token,
+                    allow_insecure,
+                } => f
                     .debug_struct("Remote")
                     .field("host", host)
                     .field("token", &token.as_ref().map(|_| "[REDACTED]"))
+                    .field("allow_insecure", allow_insecure)
                     .finish(),
             }
         }
@@ -353,7 +381,17 @@ pub mod builder {
                     map.insert(POLY_BUILDER_TIMESTAMP, timestamp.to_string().parse()?);
                     Ok(map)
                 }
-                Config::Remote { host, token } => {
+                Config::Remote {
+                    host,
+                    token,
+                    allow_insecure,
+                } => {
+                    if host.scheme() != "https" && !allow_insecure {
+                        return Err(crate::Error::validation(
+                            "only HTTPS URLs are accepted for remote builder signing; use remote_insecure for local dev",
+                        ));
+                    }
+
                     let payload = json!({
                         "method": request.method().as_str(),
                         "path": request.url().path(),
@@ -412,8 +450,9 @@ fn body_to_string(body: &Body) -> Result<String> {
     let bytes = body
         .as_bytes()
         .ok_or_else(|| Error::validation("request body is not available for HMAC signing"))?;
-    let body = std::str::from_utf8(bytes)
-        .map_err(|_utf8_error| Error::validation("request body is not valid UTF-8 for HMAC signing"))?;
+    let body = std::str::from_utf8(bytes).map_err(|_utf8_error| {
+        Error::validation("request body is not valid UTF-8 for HMAC signing")
+    })?;
     Ok(body.to_owned())
 }
 

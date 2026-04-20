@@ -10,6 +10,7 @@ use hmac::digest::InvalidLength;
 pub use reqwest::Method;
 pub use reqwest::StatusCode;
 use reqwest::header;
+use serde_json::Value;
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,11 +82,33 @@ impl Error {
         path: String,
         message: S,
     ) -> Self {
+        let message = message.into();
+        Self::status_with_payload(
+            status_code,
+            method,
+            path,
+            message.clone(),
+            None,
+            (!message.is_empty()).then_some(message),
+        )
+    }
+
+    #[must_use]
+    pub fn status_with_payload<S: Into<String>>(
+        status_code: StatusCode,
+        method: Method,
+        path: String,
+        message: S,
+        body: Option<Value>,
+        raw_body: Option<String>,
+    ) -> Self {
         Status {
             status_code,
             method,
             path,
             message: message.into(),
+            body,
+            raw_body,
         }
         .into()
     }
@@ -120,6 +143,8 @@ pub struct Status {
     pub method: Method,
     pub path: String,
     pub message: String,
+    pub body: Option<Value>,
+    pub raw_body: Option<String>,
 }
 
 impl fmt::Display for Status {
@@ -156,7 +181,7 @@ impl fmt::Display for Synchronization {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "synchronization error: multiple threads attempted a client state transition"
+            "synchronization error: multiple threads are attempting to log in or log out"
         )
     }
 }
@@ -316,7 +341,10 @@ mod tests {
         let error: Error = geoblock.into();
 
         assert_eq!(error.kind(), Kind::Geoblock);
-        assert!(error.to_string().contains("CU"), "geoblock country should be preserved");
+        assert!(
+            error.to_string().contains("CU"),
+            "geoblock country should be preserved"
+        );
     }
 
     #[test]
@@ -328,7 +356,9 @@ mod tests {
 
         assert_eq!(error.kind(), Kind::Validation);
         assert_eq!(
-            error.downcast_ref::<Validation>().map(|inner| inner.reason.as_str()),
+            error
+                .downcast_ref::<Validation>()
+                .map(|inner| inner.reason.as_str()),
             Some("bad order"),
         );
     }

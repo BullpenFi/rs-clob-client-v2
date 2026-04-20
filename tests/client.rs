@@ -5,11 +5,12 @@ use std::str::FromStr as _;
 use alloy::primitives::{U256, address};
 use httpmock::Method::{DELETE, GET, POST};
 use httpmock::MockServer;
-use polymarket_clob_client_v2::clob::{Client, Config};
 use polymarket_clob_client_v2::clob::types::{
     AssetType, BalanceAllowanceRequest, OpenOrdersRequest, OrderType, Side, SignatureTypeV2,
     TickSize,
 };
+use polymarket_clob_client_v2::clob::{Client, Config};
+use polymarket_clob_client_v2::error::Status;
 use polymarket_clob_client_v2::types::Decimal;
 use tokio::time::{Duration, sleep};
 
@@ -42,7 +43,7 @@ fn sample_open_order_json(id: &str) -> serde_json::Value {
         "price": "0.45",
         "associate_trades": [],
         "outcome": "YES",
-        "created_at": 1700000000,
+        "created_at": 1_700_000_000,
         "expiration": "0",
         "order_type": "GTC"
     })
@@ -51,15 +52,17 @@ fn sample_open_order_json(id: &str) -> serde_json::Value {
 #[test]
 fn client_rejects_non_https_hosts_by_default() {
     let error = Client::new("http://example.com", Config::default()).expect_err("http should fail");
-    assert!(error
-        .to_string()
-        .contains("only HTTPS URLs are accepted; set allow_insecure for local dev"));
+    assert!(
+        error
+            .to_string()
+            .contains("only HTTPS URLs are accepted; set allow_insecure for local dev")
+    );
 }
 
 #[test]
 fn client_allows_non_https_hosts_when_explicitly_enabled() {
-    let client =
-        Client::new("http://example.com", insecure_config()).expect("insecure http client for local dev");
+    let client = Client::new("http://example.com", insecure_config())
+        .expect("insecure http client for local dev");
     assert_eq!(client.host().as_str(), "http://example.com/");
 }
 
@@ -69,7 +72,7 @@ async fn public_ok_endpoint_works_against_httpmock() {
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/ok")
-            .header("user-agent", "polymarket-clob-client-v2");
+            .header("user-agent", "@polymarket/clob-client");
         then.status(200).body("OK");
     });
 
@@ -88,10 +91,7 @@ async fn authenticated_api_keys_endpoint_signs_l2_headers() {
         when.method(GET)
             .path("/auth/api-keys")
             .header("POLY_API_KEY", "00000000-0000-0000-0000-000000000000")
-            .header(
-                "POLY_ADDRESS",
-                "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-            );
+            .header("POLY_ADDRESS", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
         then.status(200)
             .json_body_obj(&serde_json::json!({ "apiKeys": [] }));
     });
@@ -104,7 +104,43 @@ async fn authenticated_api_keys_endpoint_signs_l2_headers() {
 }
 
 #[tokio::test]
-async fn create_or_derive_api_key_falls_back_after_non_status_create_failure() {
+async fn create_or_derive_api_key_returns_created_credentials_when_present() {
+    let server = MockServer::start();
+    let signer = common::signer();
+
+    let create_mock = server.mock(|when, then| {
+        when.method(POST).path("/auth/api-key");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "apiKey": "00000000-0000-0000-0000-000000000000",
+            "secret": "c2VjcmV0",
+            "passphrase": "passphrase"
+        }));
+    });
+    let derive_mock = server.mock(|when, then| {
+        when.method(GET).path("/auth/derive-api-key");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "apiKey": "11111111-1111-1111-1111-111111111111",
+            "secret": "ZGVyaXZlZA==",
+            "passphrase": "derived"
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let credentials = client
+        .create_or_derive_api_key(&signer, Some(7))
+        .await
+        .expect("created credentials");
+
+    create_mock.assert_calls(1);
+    derive_mock.assert_calls(0);
+    assert_eq!(
+        credentials.key().to_string(),
+        "00000000-0000-0000-0000-000000000000"
+    );
+}
+
+#[tokio::test]
+async fn create_or_derive_api_key_falls_back_after_empty_create_response() {
     let server = MockServer::start();
     let signer = common::signer();
 
@@ -121,7 +157,7 @@ async fn create_or_derive_api_key_falls_back_after_non_status_create_failure() {
         }));
     });
 
-    let client = Client::new(&server.base_url(), retrying_insecure_config()).expect("client");
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
     let credentials = client
         .create_or_derive_api_key(&signer, Some(7))
         .await
@@ -129,7 +165,39 @@ async fn create_or_derive_api_key_falls_back_after_non_status_create_failure() {
 
     create_mock.assert_calls(1);
     derive_mock.assert_calls(1);
-    assert_eq!(credentials.key().to_string(), "00000000-0000-0000-0000-000000000000");
+    assert_eq!(
+        credentials.key().to_string(),
+        "00000000-0000-0000-0000-000000000000"
+    );
+}
+
+#[tokio::test]
+async fn create_or_derive_api_key_propagates_create_failures() {
+    let server = MockServer::start();
+    let signer = common::signer();
+
+    let create_mock = server.mock(|when, then| {
+        when.method(POST).path("/auth/api-key");
+        then.status(500).body("boom");
+    });
+    let derive_mock = server.mock(|when, then| {
+        when.method(GET).path("/auth/derive-api-key");
+        then.status(200).json_body_obj(&serde_json::json!({
+            "apiKey": "00000000-0000-0000-0000-000000000000",
+            "secret": "c2VjcmV0",
+            "passphrase": "passphrase"
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let error = client
+        .create_or_derive_api_key(&signer, Some(7))
+        .await
+        .expect_err("create failure should be returned");
+
+    create_mock.assert_calls(1);
+    derive_mock.assert_calls(0);
+    assert!(error.to_string().contains("500"));
 }
 
 #[tokio::test]
@@ -142,6 +210,24 @@ async fn get_requests_are_not_retried_on_server_errors() {
 
     let client = Client::new(&server.base_url(), retrying_insecure_config()).expect("client");
     let error = client.ok().await.expect_err("GET should not retry");
+
+    mock.assert_calls(1);
+    assert!(error.to_string().contains("500"));
+}
+
+#[tokio::test]
+async fn delete_requests_are_not_retried_on_server_errors() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(DELETE).path("/cancel-all");
+        then.status(500).body("boom");
+    });
+
+    let client = common::create_authenticated(&server.base_url(), retrying_insecure_config()).await;
+    let error = client
+        .cancel_all()
+        .await
+        .expect_err("DELETE should not retry");
 
     mock.assert_calls(1);
     assert!(error.to_string().contains("500"));
@@ -165,7 +251,8 @@ async fn post_requests_retry_once_on_server_errors() {
                 return server
                     .mock_async(|when, then| {
                         when.method(POST).path("/books");
-                        then.status(200).json_body_obj(&Vec::<serde_json::Value>::new());
+                        then.status(200)
+                            .json_body_obj(&Vec::<serde_json::Value>::new());
                     })
                     .await;
             }
@@ -182,6 +269,56 @@ async fn post_requests_retry_once_on_server_errors() {
 }
 
 #[tokio::test]
+async fn structured_server_errors_preserve_json_payloads() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/ok");
+        then.status(400).json_body_obj(&serde_json::json!({
+            "error": {
+                "message": "bad request",
+                "code": "INVALID_MARKET"
+            },
+            "status": 400
+        }));
+    });
+
+    let client = Client::new(&server.base_url(), insecure_config()).expect("client");
+    let error = client.ok().await.expect_err("request should fail");
+    let status = error.downcast_ref::<Status>().expect("status error");
+
+    mock.assert();
+    assert_eq!(status.status_code, reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        status.body,
+        Some(serde_json::json!({
+            "error": {
+                "message": "bad request",
+                "code": "INVALID_MARKET"
+            },
+            "status": 400
+        }))
+    );
+    assert_eq!(
+        status
+            .raw_body
+            .as_deref()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .expect("raw body should be valid json"),
+        Some(serde_json::json!({
+            "error": {
+                "message": "bad request",
+                "code": "INVALID_MARKET"
+            },
+            "status": 400
+        }))
+    );
+    let rendered = error.to_string();
+    assert!(rendered.contains("bad request"));
+    assert!(rendered.contains("INVALID_MARKET"));
+}
+
+#[tokio::test]
 async fn authenticate_rejects_eoa_with_funder() {
     let signer = common::signer();
 
@@ -194,9 +331,11 @@ async fn authenticate_rejects_eoa_with_funder() {
         .await
         .expect_err("EOA with funder should fail");
 
-    assert!(error
-        .to_string()
-        .contains("funder address is not supported with EOA signature type"));
+    assert!(
+        error
+            .to_string()
+            .contains("funder address is not supported with EOA signature type")
+    );
 }
 
 #[tokio::test]
@@ -212,9 +351,11 @@ async fn authenticate_rejects_proxy_without_non_zero_funder() {
         .await
         .expect_err("Proxy without funder should fail");
 
-    assert!(error
-        .to_string()
-        .contains("non-zero funder address is required for Proxy/GnosisSafe signature types"));
+    assert!(
+        error
+            .to_string()
+            .contains("non-zero funder address is required for Proxy/GnosisSafe signature types")
+    );
 }
 
 #[tokio::test]
@@ -223,7 +364,9 @@ async fn calculate_market_price_matches_ts_buy_cutoff_logic() {
     let token_id = U256::from(123_u64);
 
     let mock = server.mock(|when, then| {
-        when.method(GET).path("/book").query_param("token_id", "123");
+        when.method(GET)
+            .path("/book")
+            .query_param("token_id", "123");
         then.status(200).json_body_obj(&serde_json::json!({
             "market": "market-1",
             "asset_id": "123",
@@ -262,7 +405,9 @@ async fn calculate_market_price_matches_ts_sell_cutoff_logic() {
     let token_id = U256::from(456_u64);
 
     let mock = server.mock(|when, then| {
-        when.method(GET).path("/book").query_param("token_id", "456");
+        when.method(GET)
+            .path("/book")
+            .query_param("token_id", "456");
         then.status(200).json_body_obj(&serde_json::json!({
             "market": "market-2",
             "asset_id": "456",

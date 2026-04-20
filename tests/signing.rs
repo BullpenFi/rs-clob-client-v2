@@ -1,10 +1,17 @@
+#![allow(
+    clippy::exhaustive_structs,
+    reason = "The sol! helper mirrors a fixed EIP-712 test layout"
+)]
+
 mod common;
 
 use alloy::primitives::{B256, U256, address, keccak256};
 use alloy::sol;
 use alloy::sol_types::{SolStruct as _, SolValue as _};
-use polymarket_clob_client_v2::clob::types::{Order, Side, SignatureTypeV2, sign_order, signing_domain, signing_hash};
 use polymarket_clob_client_v2::clob::types::new_order;
+use polymarket_clob_client_v2::clob::types::{
+    Order, Side, SignatureTypeV2, sign_order, signing_domain, signing_hash,
+};
 use polymarket_clob_client_v2::config::exchange_contract;
 use polymarket_clob_client_v2::{AMOY, POLYGON};
 
@@ -120,7 +127,9 @@ async fn sign_then_recover_round_trip() {
         .expect("sign order");
 
     assert_eq!(
-        signature.recover_address_from_prehash(&hash).expect("recover signer"),
+        signature
+            .recover_address_from_prehash(&hash)
+            .expect("recover signer"),
         signer.address()
     );
 }

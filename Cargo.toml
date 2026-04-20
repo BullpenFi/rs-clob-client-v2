@@ -16,6 +16,7 @@ all-features = true
 [features]
 default = ["clob"]
 clob = []
+tracing = ["dep:tracing", "dep:serde_ignored", "dep:serde_path_to_error"]
 ws = ["dep:tokio-tungstenite"]
 
 [dependencies]
@@ -41,13 +42,16 @@ rust_decimal_macros = "1.40.0"
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_html_form = "0.4.0"
+serde_ignored = { version = "0.1", optional = true }
 serde_json = "1.0.149"
+serde_path_to_error = { version = "0.1", optional = true }
 serde_repr = "0.1.20"
 serde_with = { version = "3.18.0", features = ["chrono_0_4", "json"] }
 sha2 = "0.10.9"
 sha1 = "0.10.6"
 tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "time"] }
 tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots"], optional = true }
+tracing = { version = "0.1", optional = true }
 url = "2.5.8"
 uuid = { version = "1.23.0", features = ["serde", "v4", "v7"] }
 
@@ -57,6 +61,9 @@ httpmock = "0.8.3"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
+# Keep these relaxed in this crate because `bon` and `sol!` emit internal
+# `#[allow]` attributes that become hard failures under `-D warnings`.
+# The remainder of the lint block tracks the V1 baseline.
 allow_attributes = "allow"
 allow_attributes_without_reason = "allow"
 assertions_on_result_states = "warn"
@@ -99,6 +106,7 @@ ref_patterns = "warn"
 renamed_function_params = "warn"
 rest_pat_in_fully_bound_structs = "warn"
 return_and_then = "warn"
+same_name_method = "warn"
 self_named_module_files = "warn"
 similar_names = "allow"
 single_char_lifetime_names = "warn"

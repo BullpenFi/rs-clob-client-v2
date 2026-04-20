@@ -56,8 +56,10 @@ mod tests {
     #[test]
     fn parse_rejects_non_wss_urls() {
         let error = Config::parse("ws://example.com/ws").expect_err("ws should fail");
-        assert!(error
-            .to_string()
-            .contains("only WSS URLs are accepted; set allow_insecure for local dev"));
+        assert!(
+            error
+                .to_string()
+                .contains("only WSS URLs are accepted; set allow_insecure for local dev")
+        );
     }
 }
