@@ -6,7 +6,7 @@ authors = ["Hongjun Wu <hongjunwu@gmail.com>"]
 edition = "2024"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/polymarket/rs-clob-client-v2"
+repository = "https://github.com/BullpenFi/rs-clob-client-v2"
 keywords = ["polymarket", "clob", "prediction-market", "orderbook", "trading"]
 categories = ["api-bindings", "finance", "web-programming::http-client"]
 

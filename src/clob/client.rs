@@ -1953,6 +1953,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_order_submission_retries_once_after_success_shaped_version_mismatch() {
+        let server = MockServer::start();
+        let version = server.mock(|when, then| {
+            when.method(GET).path("/version");
+            then.status(200)
+                .json_body_obj(&serde_json::json!({ "version": 2 }));
+        });
+        let client = authenticated_client(&server).await;
+        client.inner.cached_version.store(1, Ordering::Relaxed);
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let response = client
+            .retry_order_submission(|| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        Ok(serde_json::json!({ "error": ORDER_VERSION_MISMATCH_ERROR }))
+                    } else {
+                        Ok(serde_json::json!({
+                            "success": true,
+                            "errorMsg": null,
+                            "orderID": "retry-ok-success-shaped",
+                            "transactionsHashes": [],
+                            "status": "live",
+                            "takingAmount": "100",
+                            "makingAmount": "50"
+                        }))
+                    }
+                }
+            })
+            .await
+            .expect("order response");
+
+        assert_eq!(response.order_id, "retry-ok-success-shaped");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        version.assert_calls(1);
+    }
+
+    #[tokio::test]
     async fn retry_order_submission_does_not_retry_when_version_is_unchanged() {
         let server = MockServer::start();
         let version = server.mock(|when, then| {
