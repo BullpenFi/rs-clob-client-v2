@@ -1,14 +1,112 @@
-# Plan 0009: Post-0008 Targeted Follow-Up Audit
+# Plan 0009: Post-0008 Targeted Follow-Up Audit — Closure & Findings
 
-**Status:** OPEN
+**Status:** CLOSED
 **Created:** 2026-04-20
+**Closed:** 2026-04-20
 **Predecessor:** [0008-release-signoff-audit-prompt.md](0008-release-signoff-audit-prompt.md) (CLOSED)
 **Target Commit:** `79332e5` `fix: remediate 0008 release signoff findings`
-**Purpose:** Run a targeted independent follow-up audit against the post-0008 remediation set and decide whether the repository is now ready for a release-signoff verdict without another full 20-area repo sweep.
+**Purpose:** Preserve the targeted post-0008 follow-up audit prompt and record the adjudicated outcome of the scoped verification run against the remediation set present on current `HEAD`.
 
 ---
 
-## 1. Why 0009 Exists
+## 1. Follow-Up Audit Outcome
+
+The targeted post-0008 follow-up audit completed against current `HEAD`, which includes the remediation set introduced in `79332e5`. The scope remained intentionally narrower than the earlier full-repo 20-area audits and focused on the concrete blockers that kept `0008` at `NO-GO`.
+
+**Final verdict:** **GO**
+
+**Top-level adjudication:**
+- No material findings remain in the scoped post-0008 follow-up audit.
+- `0008`'s remediated blockers are now actually closed on current `HEAD`.
+- The docs-only `7ed79b4` plan commit does not change that conclusion.
+- Another full 20-agent audit is **not necessary**. A future targeted follow-up is sufficient unless a new high-risk subsystem change lands or the verification matrix stops passing.
+
+---
+
+## 2. Scoped Area Adjudication
+
+1. `Dynamic signer / maker / auth-promotion caches` — **PASS**
+   - No material findings.
+2. `Market-order validation / price=0` — **PASS**
+   - No material findings.
+3. `Pagination / header merge / retry path` — **PASS**
+   - No material findings.
+4. `Tracing / secret redaction` — **PASS**
+   - No material findings.
+5. `Response-model serialization parity` — **PASS**
+   - No material findings.
+6. `Prior regression smoke check` — **PASS WITH NOTES**
+   - The success-shaped `order_version_mismatch` retry path is correct by inspection at `src/clob/client.rs:1732` and `src/clob/client.rs:1841`.
+   - Direct regression coverage remains stronger on the non-2xx mismatch branch at `src/clob/client.rs:1906`.
+   - This was explicitly **not** treated as a release blocker.
+
+---
+
+## 3. Verification Captured During Follow-Up Audit
+
+**Build / test / lint / doc verification:**
+- `cargo check` — PASS
+- `cargo check --no-default-features` — PASS
+  - Emits only dead-code warnings in the reduced feature set.
+- `cargo check --no-default-features --features ws` — PASS
+  - Emits only dead-code warnings in the reduced feature set.
+- `cargo check --all-features` — PASS
+- `cargo test` — PASS
+- `cargo test --features ws` — PASS
+- `cargo clippy --all-targets --all-features -- -D warnings` — PASS
+- `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` — PASS
+- `cargo test -- --list` — PASS
+- `cargo test --features ws -- --list` — PASS
+- `rg -n "https://clob\\.polymarket\\.com" tests` — PASS
+  - No matches.
+
+**Captured test counts:**
+- Default: **126**
+- `ws`: **131**
+
+**Additional targeted tracing checks:**
+- `cargo test --all-features deserialize_with_warnings` — PASS
+- `cargo test --all-features redact_value` — PASS
+- `cargo test --all-features format_value_uses_redacted_payloads` — PASS
+
+---
+
+## 4. Security Delta From 0008
+
+1. Tracing-mode deserialization now redacts secret-bearing values in warning and error paths — **PASS**
+2. Secret-bearing `CreateApiKeyResponse` debug output is redacted — **PASS**
+3. Authenticated requests now merge auth headers onto default transport headers, including retry — **PASS**
+4. Main REST host validation still allows `https://` by default and `http://` only with explicit insecure opt-in — **PASS**
+5. No regression was observed in the previously accepted HMAC/base64, salt-range, or websocket scheme guardrails — **PASS**
+
+---
+
+## 5. Low-Risk Note
+
+The only explicit note from the follow-up audit was that the success-shaped `order_version_mismatch` retry path is validated primarily by direct code inspection rather than equally strong dedicated regression coverage. That note was adjudicated as **low risk** and not a release blocker.
+
+That low-risk coverage gap was later closed in `00a68ff` during the final broad polish pass recorded in [0010-final-codex-polish-audit.md](0010-final-codex-polish-audit.md).
+
+---
+
+## 6. Conclusion
+
+This targeted follow-up audit supports a **GO** verdict for the current repository state.
+
+- The post-`0008` remediation set behaves correctly.
+- The verification matrix remains green.
+- No new material regressions were found in the scoped review.
+- Another full 20-agent audit is unnecessary unless a future high-risk change lands.
+
+---
+
+## 7. Archived Targeted Audit Prompt
+
+The original open `0009` prompt is preserved below for audit traceability.
+
+---
+
+## 8. Why 0009 Exists
 
 `0008` is the historical release-signoff audit record. It closed **NO-GO** and then received a documented post-audit remediation pass.
 
@@ -28,7 +126,7 @@ That remediation pass has now been implemented and pushed at `79332e5`, includin
 
 ---
 
-## 2. Audit Goal
+## 9. Audit Goal
 
 Determine whether current `HEAD` at `79332e5` is now:
 - `GO`
@@ -41,7 +139,7 @@ This should be a **targeted follow-up audit**, not another default full-repo 20-
 
 ---
 
-## 3. Audit Scope
+## 10. Audit Scope
 
 ### In Scope
 
@@ -66,7 +164,7 @@ If the audit finds a new **HIGH** issue outside this scope, expand only as neede
 
 ---
 
-## 4. Required Verification Matrix
+## 11. Required Verification Matrix
 
 Run these commands directly against current `HEAD`:
 
@@ -91,7 +189,7 @@ A mismatch does not automatically fail the audit, but it must be explained.
 
 ---
 
-## 5. Suggested Audit Topology
+## 12. Suggested Audit Topology
 
 Use **6 to 8 focused agents** if the runtime permits. Do not spend 20 agents on a localized remediation follow-up unless the findings justify it.
 
@@ -194,7 +292,7 @@ Use **6 to 8 focused agents** if the runtime permits. Do not spend 20 agents on 
 
 ---
 
-## 6. Decision Rules
+## 13. Decision Rules
 
 - If any unresolved **HIGH** issue remains, verdict is `NO-GO`.
 - If only **MEDIUM** / **LOW** issues remain, verdict may be:
@@ -209,7 +307,7 @@ Use **6 to 8 focused agents** if the runtime permits. Do not spend 20 agents on 
 
 ---
 
-## 7. Required Report Format
+## 14. Required Report Format
 
 For each area, report:
 
@@ -229,7 +327,7 @@ Then provide:
 
 ---
 
-## 8. Auditor Guidance
+## 15. Auditor Guidance
 
 This follow-up should be adversarial but efficient.
 
