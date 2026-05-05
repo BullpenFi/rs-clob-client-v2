@@ -1,5 +1,7 @@
 # polymarket-client-sdk
 
+>Note: This is now archived. Polymarket released their official rust v2 sdk.
+
 Bullpen.fi's best-guess Rust implementation of Polymarket's CLOB V2 SDK.
 
 This repository is maintained by Bullpen.fi. It is not an official Polymarket release. The implementation is intentionally shaped to match Polymarket's official Rust V1 SDK distribution and public import surface as closely as practical, while tracking the TypeScript V2 client behavior.
